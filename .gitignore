@@ -4,6 +4,9 @@
 credentials
 config.ini
 
+# Local working notes for Claude Code — never commit
+CLAUDE.md
+
 # Raw AWS evidence contains account IDs, principal names and full policy
 # documents. Never commit any of it.
 output/

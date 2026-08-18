@@ -6,7 +6,7 @@ Reads one AWS account, normalizes IAM configuration and usage evidence, builds
 a relationship graph, applies deterministic security rules, and has an AI
 layer explain the resulting findings. Read-only, runs locally, writes JSON.
 
-Design: `docs/POC.md`. Working rules for contributors and Claude Code: `CLAUDE.md`.
+Design: `docs/POC.md`.
 
 ## Setup
 
@@ -39,5 +39,4 @@ Open `output/REPORT.html` for the human-facing demo report, or
 All 10 build stages implemented: authentication, IAM collection, normalization,
 group inheritance, last-accessed evidence, deterministic security rules,
 relationship graph, CloudTrail collection, Access Analyzer + evidence package,
-and AI explanations — plus a demo report layer. See `CLAUDE.md` for the full
-build order and verification steps.
+and AI explanations — plus a demo report layer.
