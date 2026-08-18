@@ -1,0 +1,33 @@
+{
+  "arn:aws:iam::123456789012:user/alice": {
+    "principal_name": "alice",
+    "principal_type": "user",
+    "services_last_accessed": [
+      {"ServiceNamespace": "s3", "LastAuthenticated": "2026-08-01T00:00:00+00:00"},
+      {"ServiceNamespace": "sts", "LastAuthenticated": "2026-08-01T00:00:00+00:00"}
+    ]
+  },
+  "arn:aws:iam::123456789012:user/bob": {
+    "principal_name": "bob",
+    "principal_type": "user",
+    "services_last_accessed": [
+      {"ServiceNamespace": "s3", "LastAuthenticated": null},
+      {"ServiceNamespace": "iam", "LastAuthenticated": null}
+    ]
+  },
+  "arn:aws:iam::123456789012:user/charlie": {
+    "principal_name": "charlie",
+    "principal_type": "user",
+    "services_last_accessed": [
+      {"ServiceNamespace": "s3", "LastAuthenticated": null}
+    ]
+  },
+  "arn:aws:iam::123456789012:role/DeveloperRole": {
+    "principal_name": "DeveloperRole",
+    "principal_type": "role",
+    "services_last_accessed": [
+      {"ServiceNamespace": "sts", "LastAuthenticated": null},
+      {"ServiceNamespace": "logs", "LastAuthenticated": null}
+    ]
+  }
+}

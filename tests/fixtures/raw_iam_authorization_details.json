@@ -1,0 +1,297 @@
+{
+  "UserDetailList": [
+    {
+      "UserName": "alice",
+      "UserId": "AIDAALICE",
+      "Arn": "arn:aws:iam::123456789012:user/alice",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "GroupList": ["Developers"],
+      "AttachedManagedPolicies": [
+        {
+          "PolicyName": "POC-Developer-Role-Access",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-Developer-Role-Access"
+        },
+        {
+          "PolicyName": "POC-UntrustedRole-Assume",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-UntrustedRole-Assume"
+        }
+      ],
+      "UserPolicyList": []
+    },
+    {
+      "UserName": "charlie",
+      "UserId": "AIDACHARLIE",
+      "Arn": "arn:aws:iam::123456789012:user/charlie",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "GroupList": [],
+      "AttachedManagedPolicies": [
+        {
+          "PolicyName": "POC-Developer-S3-ReadOnly",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-Developer-S3-ReadOnly"
+        }
+      ],
+      "UserPolicyList": []
+    },
+    {
+      "UserName": "bob",
+      "UserId": "AIDABOB",
+      "Arn": "arn:aws:iam::123456789012:user/bob",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "GroupList": ["Auditors"],
+      "AttachedManagedPolicies": [],
+      "UserPolicyList": [
+        {
+          "PolicyName": "InlineDenyTest",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "AllowAllS3",
+                "Effect": "Allow",
+                "Action": "s3:*",
+                "Resource": "*"
+              },
+              {
+                "Sid": "DenyBucketDelete",
+                "Effect": "Deny",
+                "Action": "s3:DeleteBucket",
+                "Resource": "*"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "GroupDetailList": [
+    {
+      "GroupName": "Developers",
+      "GroupId": "AIDADEVS",
+      "Arn": "arn:aws:iam::123456789012:group/Developers",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "AttachedManagedPolicies": [
+        {
+          "PolicyName": "POC-Developer-S3-ReadOnly",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-Developer-S3-ReadOnly"
+        }
+      ],
+      "GroupPolicyList": []
+    },
+    {
+      "GroupName": "Auditors",
+      "GroupId": "AIDAAUDITORS",
+      "Arn": "arn:aws:iam::123456789012:group/Auditors",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "AttachedManagedPolicies": [
+        {
+          "PolicyName": "POC-Developer-S3-ReadOnly",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-Developer-S3-ReadOnly"
+        },
+        {
+          "PolicyName": "POC-Auditor-IAM-Deny-Test",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-Auditor-IAM-Deny-Test"
+        }
+      ],
+      "GroupPolicyList": []
+    }
+  ],
+  "RoleDetailList": [
+    {
+      "RoleName": "UntrustedRole",
+      "RoleId": "AROAUNTRUSTED",
+      "Arn": "arn:aws:iam::123456789012:role/UntrustedRole",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "AssumeRolePolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {"AWS": "arn:aws:iam::123456789012:user/bob"},
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "AttachedManagedPolicies": [],
+      "RolePolicyList": []
+    },
+    {
+      "RoleName": "AdminRole",
+      "RoleId": "AROADMIN",
+      "Arn": "arn:aws:iam::123456789012:role/AdminRole",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "AssumeRolePolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {"AWS": "arn:aws:iam::123456789012:role/DeveloperRole"},
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "AttachedManagedPolicies": [],
+      "RolePolicyList": [
+        {
+          "PolicyName": "POC-Admin-Access",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "*",
+                "Resource": "*"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "RoleName": "DeveloperRole",
+      "RoleId": "AROADEVROLE",
+      "Arn": "arn:aws:iam::123456789012:role/DeveloperRole",
+      "CreateDate": "2026-01-01T00:00:00+00:00",
+      "AssumeRolePolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {"AWS": "arn:aws:iam::123456789012:user/alice"},
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "AttachedManagedPolicies": [
+        {
+          "PolicyName": "POC-Developer-Admin-Assume",
+          "PolicyArn": "arn:aws:iam::123456789012:policy/POC-Developer-Admin-Assume"
+        }
+      ],
+      "RolePolicyList": [
+        {
+          "PolicyName": "InlineRoleNote",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": ["logs:CreateLogGroup"],
+                "Resource": ["*"]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "Policies": [
+    {
+      "PolicyName": "POC-Developer-Role-Access",
+      "PolicyId": "ANPADEVROLEACCESS",
+      "Arn": "arn:aws:iam::123456789012:policy/POC-Developer-Role-Access",
+      "DefaultVersionId": "v1",
+      "PolicyVersionList": [
+        {
+          "VersionId": "v1",
+          "IsDefaultVersion": true,
+          "Document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Resource": "arn:aws:iam::123456789012:role/DeveloperRole"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "PolicyName": "POC-UntrustedRole-Assume",
+      "PolicyId": "ANPAUNTRUSTEDASSUME",
+      "Arn": "arn:aws:iam::123456789012:policy/POC-UntrustedRole-Assume",
+      "DefaultVersionId": "v1",
+      "PolicyVersionList": [
+        {
+          "VersionId": "v1",
+          "IsDefaultVersion": true,
+          "Document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Resource": "arn:aws:iam::123456789012:role/UntrustedRole"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "PolicyName": "POC-Developer-S3-ReadOnly",
+      "PolicyId": "ANPADEVS3",
+      "Arn": "arn:aws:iam::123456789012:policy/POC-Developer-S3-ReadOnly",
+      "DefaultVersionId": "v1",
+      "PolicyVersionList": [
+        {
+          "VersionId": "v1",
+          "IsDefaultVersion": true,
+          "Document": "%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22s3%3AGetObject%22%2C%22s3%3AListBucket%22%5D%2C%22Resource%22%3A%22arn%3Aaws%3As3%3A%3A%3Aexample-bucket%2F%2A%22%7D%5D%7D"
+        }
+      ]
+    },
+    {
+      "PolicyName": "POC-Auditor-IAM-Deny-Test",
+      "PolicyId": "ANPAAUDITOR",
+      "Arn": "arn:aws:iam::123456789012:policy/POC-Auditor-IAM-Deny-Test",
+      "DefaultVersionId": "v1",
+      "PolicyVersionList": [
+        {
+          "VersionId": "v1",
+          "IsDefaultVersion": true,
+          "Document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "AllowIamRead",
+                "Effect": "Allow",
+                "Action": ["iam:List*", "iam:Get*"],
+                "Resource": "*"
+              },
+              {
+                "Sid": "DenyCredentialReport",
+                "Effect": "Deny",
+                "Action": "iam:GetCredentialReport",
+                "Resource": "*"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "PolicyName": "POC-Developer-Admin-Assume",
+      "PolicyId": "ANPAASSUME",
+      "Arn": "arn:aws:iam::123456789012:policy/POC-Developer-Admin-Assume",
+      "DefaultVersionId": "v1",
+      "PolicyVersionList": [
+        {
+          "VersionId": "v1",
+          "IsDefaultVersion": true,
+          "Document": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Resource": "arn:aws:iam::123456789012:role/AdminRole"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

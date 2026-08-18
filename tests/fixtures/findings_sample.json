@@ -1,0 +1,19 @@
+[
+  {
+    "rule": "potentially_unused_access",
+    "principal": {
+      "id": "arn:aws:iam::123456789012:user/charlie",
+      "name": "charlie",
+      "type": "user"
+    },
+    "policy_id": "arn:aws:iam::123456789012:policy/POC-Developer-S3-ReadOnly",
+    "attribution": {
+      "attachment_type": "direct_attached"
+    },
+    "evidence_window": {
+      "sources_consulted": ["iam_last_accessed", "cloudtrail_event_history"],
+      "note": "Neither source shows activity for this access."
+    },
+    "detail": "No corresponding activity observed in the collected evidence for charlie's access via a directly attached policy (POC-Developer-S3-ReadOnly)."
+  }
+]
