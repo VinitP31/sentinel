@@ -1,0 +1,23 @@
+# Credentials and configuration — never commit
+.env
+*.pem
+credentials
+config.ini
+
+# Raw AWS evidence contains account IDs, principal names and full policy
+# documents. Never commit any of it.
+output/
+!output/**/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
