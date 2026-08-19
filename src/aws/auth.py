@@ -11,21 +11,15 @@ Everything downstream is identical either way, which is why this stays isolated.
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from src import config
-
-
 class AuthError(RuntimeError):
     """Authentication failed, or the wrong account is authenticated."""
 
 
-def get_session() -> boto3.Session:
-    return boto3.Session(
-        profile_name=config.AWS_PROFILE_NAME,
-        region_name=config.AWS_REGION,
-    )
+def get_session(profile_name: str | None, region_name: str | None) -> boto3.Session:
+    return boto3.Session(profile_name=profile_name, region_name=region_name)
 
 
-def verify_identity(session: boto3.Session) -> dict[str, str]:
+def verify_identity(session: boto3.Session, expected_account_id: str | None = None) -> dict[str, str]:
     """Confirm who we are and which account, before collecting anything.
 
     GetCallerIdentity requires no IAM permission, so a failure here means the
@@ -39,10 +33,10 @@ def verify_identity(session: boto3.Session) -> dict[str, str]:
 
     account = identity["Account"]
 
-    if config.EXPECTED_ACCOUNT_ID and account != config.EXPECTED_ACCOUNT_ID:
+    if expected_account_id and account != expected_account_id:
         raise AuthError(
             f"Authenticated account {account} does not match "
-            f"EXPECTED_ACCOUNT_ID {config.EXPECTED_ACCOUNT_ID}. Aborting."
+            f"expected account ID {expected_account_id}. Aborting."
         )
 
     return {

@@ -46,21 +46,32 @@ def _failed(error: str) -> None:
     print(f"  ✗ FAILED — {error}", file=sys.stderr)
 
 
+def _prompt(label: str, default: str, empty_hint: str = "") -> str:
+    shown = default or empty_hint
+    answer = input(f"  {label} [{shown}]: ").strip()
+    return answer or default
+
+
 def run() -> int:
     started = datetime.now(timezone.utc)
     statuses: list[CollectionStatus] = []
 
     _header("AWS IAM SECURITY AUDIT")
 
+    print("Target account (press Enter to keep the .env default)")
+    profile_name = _prompt("AWS profile name", config.AWS_PROFILE_NAME or "", "default credential chain") or None
+    region_name = _prompt("AWS region", config.AWS_REGION)
+    expected_account_id = _prompt("Expected account ID (optional)", config.EXPECTED_ACCOUNT_ID or "", "none") or None
+
     _stage(1, "Authentication & Account Verification")
     try:
-        session = auth.get_session()
-        identity = auth.verify_identity(session)
+        session = auth.get_session(profile_name, region_name)
+        identity = auth.verify_identity(session, expected_account_id)
     except auth.AuthError as exc:
         _failed(str(exc))
         return 1
 
-    print(f"  Profile     : {config.AWS_PROFILE_NAME or '(default credential chain)'}")
+    print(f"  Profile     : {profile_name or '(default credential chain)'}")
     print(f"  Account ID  : {identity['account_id']}")
     print(f"  Identity    : {identity['arn']}")
     print(f"  Region      : {identity['region']}")

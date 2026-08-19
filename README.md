@@ -28,6 +28,11 @@ account differs, so it cannot accidentally run somewhere unintended.
 python -m src.main
 ```
 
+It prompts for the AWS profile, region, and expected account ID at the start
+of each run — press Enter to keep the `.env` value, or type a different one
+to point the same connector at another account without editing `.env`. The
+target account still needs a named profile in `~/.aws/credentials`.
+
 Outputs land in `output/`, which is gitignored. Raw evidence contains account
 IDs, principal names and full policy documents; do not commit it.
 
