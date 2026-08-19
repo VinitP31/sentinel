@@ -1,8 +1,7 @@
-"""Collection status.
+"""Defines CollectionStatus, returned by every collector alongside its data.
 
-A failed collection and an empty result are different states. Conflating them
-makes a partial run indistinguishable from a complete one, so every collector
-returns one of these alongside its data.
+A failed collection and an empty result are different states. Conflating
+them makes a partial run indistinguishable from a complete one.
 """
 
 from dataclasses import dataclass, field, asdict

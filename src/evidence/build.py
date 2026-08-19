@@ -52,9 +52,8 @@ def _configured_access(normalized: dict, principal_id: str) -> list[dict]:
 
 
 def _relationships(graph: nx.DiGraph, principal_id: str) -> list[dict]:
-    """CAN_ASSUME edges reachable from this principal, including downstream
-    hops it doesn't originate (e.g. DeveloperRole -> AdminRole shows up in
-    alice's package too, since her chain passes through it)."""
+    """CAN_ASSUME edges reachable from this principal, including hops
+    further down the chain that it doesn't originate."""
     can_assume_edges = [(u, v) for u, v, data in graph.edges(data=True) if data.get("relationship") == CAN_ASSUME]
     can_assume_graph = nx.DiGraph()
     can_assume_graph.add_nodes_from(graph.nodes)

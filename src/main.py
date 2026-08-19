@@ -32,12 +32,6 @@ def _header(title: str) -> None:
     _rule("=")
 
 
-def _section(title: str) -> None:
-    print()
-    print(title)
-    _rule("-")
-
-
 def _stage(number: int, title: str) -> None:
     print()
     print(f"[{number}/10] {title}")
@@ -176,8 +170,7 @@ def run() -> int:
         print(f"  evidence packages: {len(evidence_package['packages'])}")
         _ok(f"-> {analyzer_path.relative_to(config.PROJECT_ROOT)}, {evidence_path.relative_to(config.PROJECT_ROOT)}")
 
-        # AI explanations of the deterministic findings above.
-        # findings.json is never touched here — only read via `findings`.
+        # AI explanations of the findings above — findings.json itself is only read, never modified here.
         _stage(10, "AI Security Explanation")
         explanations, ai_status = explain_findings(findings, evidence_package)
         statuses.append(ai_status)
@@ -191,8 +184,7 @@ def run() -> int:
             _failed(ai_status.error)
             print(f"  ({len(explanations)} explanation(s) generated before the failure)", file=sys.stderr)
 
-        # Demo report — presentation only, reads the already-written outputs
-        # above and the already-rendered graph.html; nothing recomputed.
+        # Demo report — presentation only; reads outputs already written above, recomputes nothing.
         report_context = {
             "identity": identity,
             "normalized": normalized,

@@ -127,7 +127,7 @@ def _edge_title(data: dict) -> str:
 
 
 def _style_copy(graph: nx.DiGraph, findings: list[dict]) -> nx.DiGraph:
-    """Styled deep copy of the full graph — the original is never touched."""
+    """Return a styled deep copy of graph — never mutate the original."""
     styled = copy.deepcopy(graph)
     risky_ids, review_ids = _risk_ids(findings)
     findings_by_node = _findings_by_node(findings)
@@ -368,11 +368,7 @@ def _legend_html() -> str:
 
 
 def render_graph(graph: nx.DiGraph, findings: list[dict], output_path: Path) -> Path:
-    """Render a self-contained HTML file with a Security View / Full Graph toggle.
-
-    Security View is shown by default. Does not modify `graph`, `findings`,
-    or graph.json — everything here operates on styled deep copies.
-    """
+    """Render the toggleable HTML view (Security View / Full Graph); operates on styled copies only."""
     styled = _style_copy(graph, findings)
     security_ids = _security_view_node_ids(graph, findings)
     full_ids = set(styled.nodes)

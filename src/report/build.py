@@ -1,18 +1,9 @@
-"""Human-facing demo report — presentation layer only.
+"""Builds the human-facing HTML report from data already computed elsewhere.
 
-Reads already-generated outputs (findings.json, evidence_package.json,
-explanations.json, the raw collector data, and the already-rendered
-graph.html) and assembles one self-contained HTML file. Invents nothing:
-every number and every finding/explanation/evidence entry shown here is
-read verbatim from what earlier stages already produced. No AWS calls, no
-new relationships, no re-derivation of findings.
-
-Designed to be readable top-to-bottom in one pass: executive summary and the
-one headline risk first, compact finding cards next, the embedded graph
-(src/graph/visualize.py's actual graph.html, not a second implementation),
-then principal-by-principal and source-by-source detail for anyone who wants
-to dig further. Deterministic findings and AI explanations are always
-visually distinct — the AI never appears to be the source of a finding.
+Just assembles and displays — reads findings, evidence, and explanations
+that already exist and writes them into one HTML file. Never invents or
+recalculates anything, and reuses the existing graph.html rather than
+building a second graph.
 """
 
 import base64
