@@ -1,4 +1,4 @@
-# AWS IAM Security Audit Connector POC
+# Sentinel — AWS IAM Security Audit Connector POC
 
 ## 1. Purpose
 
