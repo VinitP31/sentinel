@@ -7,8 +7,8 @@ get_account_authorization_details) — pagination is manual via the response's
 IsTruncated/Marker fields once the job has completed.
 
 The poll loop here waits seconds for AWS to finish computing an already
-generated job. That is not the ~4-hour last-accessed propagation delay
-CLAUDE.md forbids working around — recent activity can still be entirely
+generated job. That is not the ~4-hour last-accessed propagation delay,
+which must never be worked around — recent activity can still be entirely
 absent from a completed job's results, and that is an expected, valid
 result, not a collection failure.
 

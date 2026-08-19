@@ -2,13 +2,13 @@
 
 One account-wide LookupEvents sweep for the configured lookback window and
 region — not one call per principal. LookupEvents has a boto3 paginator
-(unlike Stage 5's get_service_last_accessed_details), so pagination follows
-the standard "stop only on an absent token" rule.
+(unlike get_service_last_accessed_details), so pagination follows the
+standard "stop only on an absent token" rule.
 
 Event History is 90 days of management events for a single region, and never
 includes data events such as s3:GetObject — an API limitation, not a filter
 this code applies. No event-name or principal filtering is done here either;
-the full window is collected and any subset a rule needs is Stage 6/8's
+the full window is collected and any subset a rule needs is analysis's
 concern, not collection's.
 
 Each event is attributed to a normalized principal ARN by inspecting its

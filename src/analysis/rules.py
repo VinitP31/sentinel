@@ -1,13 +1,8 @@
 """Deterministic security rules over the common model.
 
-Stage 6 scope: broad_permission, administrative_access, potentially_unused_access.
-Explicit Deny precedence is not a rule of its own — POC.md describes it as a
-correctness requirement for computing effective access, so it lives here as
-the shared `_is_denied` check used by every rule below. Indirect privilege
-paths need CAN_ASSUME/trust-policy traversal (Stage 7) and are out of scope.
-
-Stage 8 update: potentially_unused_access now also consults CloudTrail Event
-History alongside IAM last-accessed, rather than last-accessed alone.
+Deny precedence is a correctness requirement, not a rule of its own, so it
+lives here as the shared `_is_denied` check used by every rule below.
+Indirect privilege paths need graph traversal and live in their own module.
 
 Findings are code-derived and reproducible: the same normalized input and
 usage evidence always produce the same findings.
@@ -92,7 +87,7 @@ def broad_permission_and_administrative_access(normalized: dict) -> list[dict]:
 
     Emits both `broad_permission` and `administrative_access` for the same
     match — they are separate deterministic rules that may legitimately
-    identify the same access, per CLAUDE.md's attribution requirement.
+    identify the same access, each with its own attribution.
     """
     identity_by_id = _index_by_id(normalized["users"] + normalized["groups"] + normalized["roles"])
     policy_by_id = _index_by_id(normalized["policies"])
@@ -193,14 +188,10 @@ def _cloudtrail_activity(principal_services: set[str], services: set[str] | None
 def potentially_unused_access(normalized: dict, last_accessed: dict, cloudtrail: dict) -> list[dict]:
     """Flag access with no corresponding activity in the collected evidence.
 
-    Only evaluated for users and roles — Stage 5 does not collect
-    last-accessed evidence for groups, and groups cannot be CloudTrail
-    principals either. Consults both iam_last_accessed and
-    cloudtrail_event_history: activity in either is sufficient to suppress
-    the finding — the two sources are never reconciled by preferring
-    whichever is non-empty, only combined with OR. Kept at service/principal
-    granularity, same as Stage 5-6 — CloudTrail is not used to claim a
-    specific action was exercised.
+    Users and roles only — groups have no last-accessed data and can't be
+    CloudTrail principals. Activity in either iam_last_accessed or
+    cloudtrail_event_history suppresses the finding; the two are never
+    reconciled by preferring whichever is non-empty, only combined with OR.
     """
     identity_by_id = _index_by_id(normalized["users"] + normalized["groups"] + normalized["roles"])
     policy_by_id = _index_by_id(normalized["policies"])

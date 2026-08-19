@@ -1,4 +1,4 @@
-"""AI explanation layer (Stage 10).
+"""AI explanation layer.
 
 Explains deterministic findings (src/analysis/) using each finding's own
 principal's evidence package (src/evidence/) — nothing else. Never has AWS
@@ -7,10 +7,9 @@ decides whether something is a finding; findings.json is read here, never
 written.
 
 finding_id, rule, and principal are taken directly from the deterministic
-finding and injected into the output by this code — the model is never
-asked to reproduce them, so it cannot introduce a transcription error into
-identifying fields. The model only fills in the explanatory fields, and only
-from the finding plus that one principal's evidence package.
+finding and injected into the output by this code, not reproduced by the
+model — so a transcription error can't corrupt an identifying field. The
+model only fills in the explanatory fields.
 """
 
 import hashlib

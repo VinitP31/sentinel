@@ -1,10 +1,10 @@
-"""Evidence package assembly for the AI layer (Stage 10).
+"""Evidence package assembly for the AI layer.
 
 Packages already-collected evidence per principal — it does not compute
-anything new. Findings (Stage 6/7) are deliberately not embedded here; they
-stay in output/findings/findings.json and are joined by principal id later.
-This module never decides whether something is a problem, only assembles
-what already exists.
+anything new. Findings are deliberately not embedded here; they stay in
+output/findings/findings.json and are joined by principal id later. This
+module never decides whether something is a problem, only assembles what
+already exists.
 """
 
 import networkx as nx

@@ -23,8 +23,8 @@ EXPECTED_ACCOUNT_ID: str | None = os.getenv("EXPECTED_ACCOUNT_ID") or None
 # CloudTrail Event History retains 90 days; values above that are pointless.
 CLOUDTRAIL_LOOKBACK_DAYS: int = min(int(os.getenv("CLOUDTRAIL_LOOKBACK_DAYS", "90")), 90)
 
-# AI layer (Stage 10). Never used to authenticate to AWS — this key only
-# talks to OpenAI's API.
+# AI layer. Never used to authenticate to AWS — this key only talks to
+# OpenAI's API.
 OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY") or None
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 

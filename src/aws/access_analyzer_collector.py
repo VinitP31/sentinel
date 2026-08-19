@@ -3,8 +3,8 @@
 Read-only inspection of an analyzer that already exists in the account. This
 code never creates or modifies an analyzer, and never queries the paid
 unused-access analyzer types (ACCOUNT_UNUSED_ACCESS / ORGANIZATION_UNUSED_ACCESS)
-— only the external-access types (ACCOUNT / ORGANIZATION), per CLAUDE.md's
-explicit ban on enabling unused-access analysis.
+— only the external-access types (ACCOUNT / ORGANIZATION). The unused-access
+types are billed per principal per month and must stay off.
 
 An existing external-access analyzer returning zero findings is a
 successful, empty result — not a failure.

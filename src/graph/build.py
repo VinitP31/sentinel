@@ -5,7 +5,7 @@ src/normalize/. Establishes nodes and relationships only; does not decide
 whether anything is a security problem (that is src/analysis/). Must not
 import from src/analysis/ — CAN_ASSUME resolution needs a small amount of
 wildcard/Deny-matching logic, duplicated here in minimal form rather than
-importing Stage 6's rules module, to keep the layers independent.
+importing the rules module, to keep the layers independent.
 
 Never emits a HAS_ROLE edge — the relationship is Principal -> CAN_ASSUME ->
 Role, and only when both a permission grant and the target role's trust
@@ -144,10 +144,9 @@ def build_graph(normalized: dict) -> nx.DiGraph:
     for attachment in normalized["attachments"]:
         attachments_by_principal.setdefault(attachment["principal_id"], []).append(attachment)
 
-    # Deny precedence is checked within a single policy's own permissions,
-    # matching Stage 6's same-policy scoping (POC.md's planted test case is
-    # itself a single-policy Allow+Deny pair) — a Deny in one attached policy
-    # is not treated as overriding an Allow granted by a different policy.
+    # Deny precedence is checked within a single policy's own permissions —
+    # a Deny in one attached policy is not treated as overriding an Allow
+    # granted by a different policy.
     assumable_principals = normalized["users"] + normalized["roles"]
     for role in normalized["roles"]:
         trusted_arns = _trusted_principal_arns(role["trust_policy"])

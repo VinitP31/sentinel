@@ -1,15 +1,4 @@
-"""Entry point.
-
-Implements all 10 stages: authenticate, verify the account, collect IAM
-configuration, write raw evidence, normalize direct/inline policies, resolve
-group inheritance, collect service last-accessed evidence, apply
-deterministic security rules, build the relationship graph, find indirect
-privilege paths, collect CloudTrail Event History, collect Access Analyzer
-external-access findings, assemble the per-principal evidence package, and
-generate AI explanations of the deterministic findings.
-
-See CLAUDE.md for the build order.
-"""
+"""Entry point. Runs the pipeline end to end and writes each stage's output to disk."""
 
 import sys
 from datetime import datetime, timezone
@@ -69,7 +58,6 @@ def run() -> int:
 
     _header("AWS IAM SECURITY AUDIT")
 
-    # Stage 1 — authenticate and confirm the account
     _stage(1, "Authentication & Account Verification")
     try:
         session = auth.get_session()
@@ -84,7 +72,6 @@ def run() -> int:
     print(f"  Region      : {identity['region']}")
     _ok("connected")
 
-    # Stage 2 — IAM configuration
     _stage(2, "IAM Configuration Collection")
     raw_iam, status = iam_collector.collect(session)
     statuses.append(status)
@@ -96,14 +83,13 @@ def run() -> int:
         print(f"  Pages fetched: {status.pages_fetched}")
         _ok(f"-> {path.relative_to(config.PROJECT_ROOT)}")
 
-        # Stage 3 — normalize direct attached + inline policies
         _stage(3, "IAM Normalization")
         normalized = normalize(raw_iam)
         print(f"  policies: {len(normalized['policies'])}, permissions: {len(normalized['permissions'])}")
         print(f"  attachments (direct/inline): {len(normalized['attachments'])}")
         _ok()
 
-        # Stage 4 — resolve group-inherited access on top of the same model
+        # Resolves group-inherited access on top of the same attachment model.
         _stage(4, "Group Inheritance")
         normalized = resolve_group_inheritance(normalized)
         normalized_path = write_json(config.NORMALIZED_DIR / "iam.json", normalized)
@@ -111,7 +97,7 @@ def run() -> int:
         print(f"  attachments (incl. group-inherited): {len(normalized['attachments'])}")
         _ok(f"-> {normalized_path.relative_to(config.PROJECT_ROOT)}")
 
-        # Stage 5 — service last-accessed evidence, one job per user/role
+        # One last-accessed job per user/role.
         _stage(5, "Last Accessed Evidence")
         principals = [
             {"id": p["id"], "name": p["name"], "type": p["type"]}
@@ -127,14 +113,14 @@ def run() -> int:
                 _failed(f"{s.source}: {s.error}")
         _ok(f"{succeeded}/{len(last_accessed_statuses)} principals -> {last_accessed_path.relative_to(config.PROJECT_ROOT)}")
 
-        # Stage 7 — relationship graph (built from normalized data only)
+        # Built from normalized data only.
         _stage(7, "Relationship Graph")
         graph = build_graph(normalized)
         graph_path = write_json(config.GRAPH_DIR / "graph.json", nx.node_link_data(graph))
         print(f"  nodes: {graph.number_of_nodes()}, edges: {graph.number_of_edges()}")
         _ok(f"-> {graph_path.relative_to(config.PROJECT_ROOT)}")
 
-        # Stage 8 — CloudTrail Event History, one account-wide sweep
+        # One account-wide sweep, not per-principal.
         _stage(8, "CloudTrail Event History")
         cloudtrail_data, cloudtrail_status = cloudtrail_collector.collect(session, config.CLOUDTRAIL_LOOKBACK_DAYS)
         statuses.append(cloudtrail_status)
@@ -147,13 +133,13 @@ def run() -> int:
         else:
             _failed(cloudtrail_status.error)
 
-        # Stage 6 — deterministic security rules (needs stage 5+7+8 evidence,
-        # hence prints after them despite its lower stage number)
+        # Needs the last-accessed, graph and CloudTrail evidence above, hence
+        # printed after them here.
         _stage(6, "Deterministic Security Analysis")
         findings = rules.run_all(normalized, last_accessed_data, cloudtrail_data)
 
-        # Indirect privilege path also belongs to stage 7's graph, evaluated
-        # here alongside the rest of the deterministic findings.
+        # Indirect privilege path also needs the graph, evaluated here
+        # alongside the rest of the deterministic findings.
         findings += find_indirect_privilege_paths(graph, normalized)
 
         findings_path = write_json(config.FINDINGS_DIR / "findings.json", findings)
@@ -169,7 +155,7 @@ def run() -> int:
         graph_html_path = render_graph(graph, findings, config.GRAPH_DIR / "graph.html")
         print(f"  visualization -> {graph_html_path.relative_to(config.PROJECT_ROOT)}")
 
-        # Stage 9 — Access Analyzer external-access findings + evidence package
+        # External-access findings, then the per-principal evidence package.
         _stage(9, "Access Analyzer & Evidence Package")
         analyzer_data, analyzer_status = access_analyzer_collector.collect(session)
         statuses.append(analyzer_status)
@@ -190,7 +176,7 @@ def run() -> int:
         print(f"  evidence packages: {len(evidence_package['packages'])}")
         _ok(f"-> {analyzer_path.relative_to(config.PROJECT_ROOT)}, {evidence_path.relative_to(config.PROJECT_ROOT)}")
 
-        # Stage 10 — AI explanations of the deterministic findings.
+        # AI explanations of the deterministic findings above.
         # findings.json is never touched here — only read via `findings`.
         _stage(10, "AI Security Explanation")
         explanations, ai_status = explain_findings(findings, evidence_package)

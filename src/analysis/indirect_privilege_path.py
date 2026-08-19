@@ -1,9 +1,8 @@
-"""Indirect privilege path — the one rule deferred from Stage 6.
+"""Indirect privilege path — access reachable only through a role-assumption chain.
 
-Requires the graph's resolved CAN_ASSUME edges (Stage 7), since it depends on
-role-assumption chains that grant+trust checking alone (not a raw permission
-grant) can establish. Reuses Stage 6's effective-access helpers rather than
-reimplementing wildcard/Deny matching a third time.
+Lives outside rules.py because it needs the graph's resolved CAN_ASSUME
+edges, not raw grants. Reuses rules.py's effective-access helpers rather
+than reimplementing wildcard/Deny matching a third time.
 """
 
 import networkx as nx
@@ -52,8 +51,8 @@ def find_indirect_privilege_paths(graph: nx.DiGraph, normalized: dict) -> list[d
     A finding fires only when every hop in the chain already satisfies
     CAN_ASSUME's grant+trust requirement — the graph, not this rule, is what
     guarantees that. If the graph is missing an edge, the path simply will
-    not exist here, matching CLAUDE.md's framing that a wrong graph means a
-    finding fails to appear rather than appearing incorrectly.
+    not exist here — a wrong graph means a finding fails to appear rather
+    than appearing incorrectly.
     """
     identity_by_id = _index_by_id(normalized["users"] + normalized["groups"] + normalized["roles"])
     assumable_principals = normalized["users"] + normalized["roles"]

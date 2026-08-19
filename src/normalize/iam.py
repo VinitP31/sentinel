@@ -1,11 +1,11 @@
 """Normalize raw IAM configuration into the common model.
 
-Stage 3: direct attached policies and inline policies. Stage 4: group
-membership and group-inherited access, added on top of the same attachment
-records rather than a second permission model. Role-assumption graph logic is
-Stage 7. This module does not decide whether anything is a security
-problem — it only translates AWS vocabulary into the common model
-(identities, groups, roles, policies, permissions, attachments, memberships).
+Covers direct/inline policy attachments and group-inherited access, added
+on top of the same attachment records rather than a second permission
+model. Role-assumption graph logic lives in src/graph/. This module does
+not decide whether anything is a security problem — it only translates AWS
+vocabulary into the common model (identities, groups, roles, policies,
+permissions, attachments, memberships).
 """
 
 from typing import Any
@@ -153,7 +153,7 @@ def normalize(raw: dict) -> dict:
 
     Returns the common-model records, keyed by type, plus user->group
     `memberships`. Does not resolve membership into inherited access —
-    that is `resolve_group_inheritance`, Stage 4's second half.
+    that is `resolve_group_inheritance`.
     """
     users = []
     groups = []
@@ -222,15 +222,10 @@ def normalize(raw: dict) -> dict:
 
 
 def resolve_group_inheritance(normalized: dict) -> dict:
-    """Add group-inherited attachment records on top of Stage 3's model.
+    """Add group-inherited attachment records on top of the normalized model.
 
-    For each user->group membership, every policy the group holds (attached
-    or inline) becomes an additional attachment for that user, typed
-    `group_inherited` and naming the source group — per CLAUDE.md's Stage 4
-    requirement. Existing direct/inline attachments and permission records
-    are untouched; inherited access resolves against the same `policy_id`,
-    so Deny statements and wildcards already normalized in Stage 3 carry
-    through unchanged.
+    These resolve against the same `policy_id`, so Deny statements and
+    wildcards carry through unchanged.
     """
     inherited = []
     for membership in normalized["memberships"]:
