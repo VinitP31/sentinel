@@ -1,4 +1,4 @@
-"""Stage 3 tests: normalize direct attached + inline policies.
+"""Normalize direct attached + inline policies.
 
 Scope: users, groups, roles, policies, permissions, attachments. No group
 inheritance, no CAN_ASSUME graph logic, no usage evidence, no security rules.
@@ -37,7 +37,7 @@ def test_counts_reconcile_against_raw(raw, result):
     # for bob, DeveloperRole and AdminRole (3 inline policies total).
     assert len(result["policies"]) == len(raw["Policies"]) + 3
 
-    # Direct/inline attachments only (Stage 3 scope, before group inheritance):
+    # Direct/inline attachments only, before group inheritance:
     # alice(2 direct) + Developers(direct) + Auditors(2 direct) +
     # charlie(direct) + DeveloperRole(direct) + bob(inline) +
     # DeveloperRole(inline) + AdminRole(inline) = 10.
@@ -126,7 +126,7 @@ def test_no_aws_specific_field_names_leak(result):
             assert forbidden.isdisjoint(record.keys())
 
 
-# --- Stage 4: group inheritance -------------------------------------------
+# --- group inheritance -----------------------------------------------------
 
 
 def attachments_for(inherited_result, principal_id):
@@ -188,8 +188,7 @@ def test_charlie_s3_access_remains_direct_not_inherited(result):
 
 def test_auditors_deny_inherited_by_bob_permission_lookup(result):
     # Attribution names the source group; the underlying permission (with
-    # Deny intact) is reached the same way Stage 3 always reached it — via
-    # policy_id, not a second permission model.
+    # Deny intact) is reached via policy_id, not a second permission model.
     inherited = resolve_group_inheritance(result)
     bob = by_name(result["users"], "bob")
     deny_policy = by_name(result["policies"], "POC-Auditor-IAM-Deny-Test")
@@ -218,8 +217,8 @@ def test_direct_and_inline_attachments_unchanged_by_inheritance(result):
 
 def test_no_role_assumption_or_usage_logic_added(result):
     inherited = resolve_group_inheritance(result)
-    # Stage 4 must not introduce CAN_ASSUME resolution, activity/usage
-    # evidence, or security findings — those are Stages 5-6.
+    # Group inheritance must not introduce CAN_ASSUME resolution,
+    # activity/usage evidence, or security findings.
     assert set(inherited.keys()) == {
         "users",
         "groups",

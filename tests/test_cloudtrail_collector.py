@@ -1,4 +1,4 @@
-"""Stage 8 tests: CloudTrail Event History collection.
+"""CloudTrail Event History collection tests.
 
 No live AWS calls — the boto3 cloudtrail client is mocked. One account-wide
 sweep, not per-principal; covers pagination, empty-success, evidence window

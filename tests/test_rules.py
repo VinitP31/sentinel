@@ -1,12 +1,12 @@
-"""Stage 6 tests: deterministic security rules.
+"""Deterministic security rules tests.
 
 Scope: broad_permission, administrative_access, potentially_unused_access.
 Explicit Deny precedence is exercised as the internal effective-access check
 these rules share — there is no standalone Deny finding (see src/analysis/rules.py).
 No CAN_ASSUME/graph logic, no AI. potentially_unused_access's CloudTrail
-consultation (Stage 8) is exercised with an empty events fixture here, so
-these tests stay isolated to the last-accessed-only behavior; CloudTrail's
-suppression behavior has its own tests in test_potentially_unused_access_cloudtrail.py.
+consultation is exercised with an empty events fixture here, so these tests
+stay isolated to the last-accessed-only behavior; CloudTrail's suppression
+behavior has its own tests in test_potentially_unused_access_cloudtrail.py.
 """
 
 import json
@@ -132,7 +132,7 @@ def test_bob_and_charlie_flagged_unused_alice_is_not(all_findings):
 
 def test_missing_last_accessed_entry_treated_as_no_activity(all_findings):
     # AdminRole is deliberately absent from the last_accessed fixture,
-    # simulating a principal Stage 5 has no evidence for at all.
+    # simulating a principal with no last-accessed evidence at all.
     assert len(findings_for(all_findings, rules.POTENTIALLY_UNUSED_ACCESS, "AdminRole")) == 1
 
 

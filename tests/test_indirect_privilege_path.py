@@ -1,7 +1,7 @@
-"""Stage 7 tests: indirect_privilege_path.
+"""indirect_privilege_path tests.
 
 Requires >=2 CAN_ASSUME hops ending at a role holding Action=*, Resource=*.
-Deferred from Stage 6 because it needs the resolved graph, not raw grants.
+Lives outside rules.py because it needs the resolved graph, not raw grants.
 """
 
 import copy

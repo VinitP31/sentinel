@@ -1,6 +1,6 @@
-"""Stage 8 tests: potentially_unused_access consulting both usage sources.
+"""potentially_unused_access consulting both usage sources.
 
-CLAUDE.md requires the two evidence sources never be reconciled by
+The two evidence sources must never be reconciled by
 preferring whichever is non-empty — activity in either counts, and neither
 source overrides what the other reports. These tests exercise that logic
 directly against the fixture's charlie (S3, direct_attached, no last-accessed

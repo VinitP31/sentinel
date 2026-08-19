@@ -1,9 +1,9 @@
-"""Stage 7 tests: relationship graph construction.
+"""Relationship graph construction tests.
 
 Scope: nodes/edges only, resolved CAN_ASSUME requiring grant + trust. No
 security judgement here — that's src/analysis/. The fixture's UntrustedRole
-trusts bob while alice holds a grant on it, mirroring CLAUDE.md's negative
-test case exactly.
+trusts bob while alice holds a grant on it — the negative test case for
+CAN_ASSUME.
 """
 
 import json

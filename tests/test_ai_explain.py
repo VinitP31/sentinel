@@ -1,4 +1,4 @@
-"""Stage 10 tests: AI explanation layer.
+"""AI explanation layer tests.
 
 No real OpenAI API call anywhere — the client is a mock/fake throughout.
 findings.json is never touched by this layer; these tests operate on

@@ -1,8 +1,8 @@
-"""Stage 9 tests: Access Analyzer external-access collection.
+"""Access Analyzer external-access collection tests.
 
 No live AWS calls — the boto3 accessanalyzer client is mocked. Covers
 type/status filtering (external-access only, ACTIVE only) and the
-empty-findings-is-success case that mirrors CLAUDE.md's exact test scenario.
+empty-findings-is-success case, matching the planted test-account scenario.
 """
 
 from unittest.mock import MagicMock

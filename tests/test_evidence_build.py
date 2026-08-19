@@ -1,4 +1,4 @@
-"""Stage 9 tests: evidence package assembly.
+"""Evidence package assembly tests.
 
 Packages already-collected evidence per user/role — no new computation, no
 new findings. findings.json stays untouched and separate.

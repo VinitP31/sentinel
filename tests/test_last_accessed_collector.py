@@ -1,4 +1,4 @@
-"""Stage 5 tests: service last-accessed collection.
+"""Service last-accessed collection tests.
 
 No live AWS calls — the boto3 iam client is mocked. Covers: job polling to
 completion, manual Marker-based pagination (no paginator model exists for
@@ -109,7 +109,7 @@ def test_empty_services_is_success_not_failure():
 def test_empty_result_does_not_trigger_extra_calls():
     # An empty-but-completed result must not cause additional polling —
     # that would be indistinguishable from retrying to force fresher data,
-    # which CLAUDE.md forbids.
+    # a retry loop must not exist to force this.
     iam = MagicMock()
     iam.generate_service_last_accessed_details.return_value = {"JobId": "job-1"}
     iam.get_service_last_accessed_details.return_value = {
