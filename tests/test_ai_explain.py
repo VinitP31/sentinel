@@ -225,7 +225,7 @@ def test_can_assume_path_preserved_in_prompt_payload():
     assert ("DeveloperRole", "AdminRole") in pairs
 
 
-def test_findings_json_byte_for_byte_unchanged_after_stage_10(tmp_path):
+def test_findings_json_byte_for_byte_unchanged(tmp_path):
     findings_path = FIXTURE_DIR / "findings_sample.json"
     findings = json.loads(findings_path.read_text())
     before = findings_path.read_bytes()

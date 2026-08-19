@@ -173,9 +173,8 @@ def test_last_accessed_data_included(normalized, package):
 
 def test_missing_last_accessed_entry_yields_empty_list(normalized, package):
     dev_role_id = by_name(normalized, "roles", "DeveloperRole")["id"]
-    # DeveloperRole isn't in the last_accessed fixture at all under some
-    # variants — whether present or not, the field must be a list, never
-    # a missing key or an error.
+    # DeveloperRole has no last_accessed entry in the fixture; the field
+    # must still be a list, never missing.
     assert isinstance(package["packages"][dev_role_id]["last_accessed"], list)
 
 

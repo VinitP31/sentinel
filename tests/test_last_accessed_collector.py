@@ -107,9 +107,7 @@ def test_empty_services_is_success_not_failure():
 
 
 def test_empty_result_does_not_trigger_extra_calls():
-    # An empty-but-completed result must not cause additional polling —
-    # that would be indistinguishable from retrying to force fresher data,
-    # a retry loop must not exist to force this.
+    # Empty-but-completed must not trigger extra polling calls.
     iam = MagicMock()
     iam.generate_service_last_accessed_details.return_value = {"JobId": "job-1"}
     iam.get_service_last_accessed_details.return_value = {

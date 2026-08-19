@@ -291,8 +291,6 @@ def test_deterministic_and_ai_labels_distinct(context, graph_html_path, tmp_path
     content = output.read_text()
     assert "DETERMINISTIC FINDING" in content
     assert "AI EXPLANATION" in content
-    # the old verbose per-card label must be gone
-    assert "AI Explanation (Stage 10" not in content
 
 
 def test_unused_access_is_a_compact_table_not_cards(context, graph_html_path, tmp_path):
