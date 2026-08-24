@@ -45,3 +45,32 @@ def verify_identity(session: boto3.Session, expected_account_id: str | None = No
         "user_id": identity["UserId"],
         "region": session.region_name,
     }
+
+
+def assume_role(
+    base_session: boto3.Session,
+    role_arn: str,
+    session_name: str = "sentinel-audit",
+    duration_seconds: int = 3600,
+) -> boto3.Session:
+    """Exchange base_session's identity for a session scoped to role_arn.
+
+    Returns a new boto3.Session backed by temporary credentials — never a
+    raw dict of key/secret/token a caller could log or persist.
+    """
+    try:
+        response = base_session.client("sts").assume_role(
+            RoleArn=role_arn,
+            RoleSessionName=session_name,
+            DurationSeconds=duration_seconds,
+        )
+    except (ClientError, BotoCoreError) as exc:
+        raise AuthError(f"Could not assume role {role_arn}: {exc}") from exc
+
+    credentials = response["Credentials"]
+    return boto3.Session(
+        aws_access_key_id=credentials["AccessKeyId"],
+        aws_secret_access_key=credentials["SecretAccessKey"],
+        aws_session_token=credentials["SessionToken"],
+        region_name=base_session.region_name,
+    )
