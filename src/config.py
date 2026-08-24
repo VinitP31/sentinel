@@ -37,3 +37,40 @@ FINDINGS_DIR = OUTPUT_DIR / "findings"
 EVIDENCE_DIR = OUTPUT_DIR / "evidence"
 AI_DIR = OUTPUT_DIR / "ai"
 REPORT_PATH = OUTPUT_DIR / "REPORT.html"
+
+
+# Account-scoped output paths. With no account_label, every function below
+# resolves to exactly the constants above (OUTPUT_DIR/RAW_DIR/etc) — the
+# single-account CLI path is unaffected. With a label (e.g. "PROD"), output
+# is rooted under OUTPUT_DIR/<account_label>/ instead, so multiple accounts
+# can be audited into separate trees without colliding.
+def account_output_root(account_label: str | None = None) -> Path:
+    return OUTPUT_DIR if account_label is None else OUTPUT_DIR / account_label
+
+
+def raw_dir(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "raw"
+
+
+def normalized_dir(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "normalized"
+
+
+def graph_dir(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "graph"
+
+
+def findings_dir(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "findings"
+
+
+def evidence_dir(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "evidence"
+
+
+def ai_dir(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "ai"
+
+
+def report_path(account_label: str | None = None) -> Path:
+    return account_output_root(account_label) / "REPORT.html"
