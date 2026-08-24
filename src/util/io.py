@@ -10,9 +10,13 @@ from pathlib import Path
 from typing import Any
 
 
-def _fallback(value: Any) -> str:
+def _fallback(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "as_dict"):
+        return value.as_dict()
     raise TypeError(f"Cannot serialize {type(value).__name__} to JSON")
 
 
