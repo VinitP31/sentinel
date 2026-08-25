@@ -14,9 +14,20 @@ result, not a collection failure.
 
 Each principal gets its own CollectionStatus, so one throttled or denied
 principal does not mark the whole batch as failed.
+
+Principals are independent AWS jobs — one principal's generate/poll/paginate
+sequence never depends on another's — so collect() runs them through a
+small bounded thread pool (MAX_WORKERS) instead of one at a time. A single
+boto3 IAM client is shared across workers: botocore clients are safe for
+concurrent use from multiple threads for making calls (each call is a
+self-contained request over the client's connection pool), so this mirrors
+the same shared-client, bounded-worker-count shape already used for AI
+explanations (src/ai/explain.py) rather than inventing a new pattern or a
+per-thread client/session.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -27,6 +38,7 @@ SOURCE = "last_accessed"
 
 POLL_INTERVAL_SECONDS = 2
 MAX_POLL_ATTEMPTS = 60  # ~2 minutes, for job completion only
+MAX_WORKERS = 5
 
 
 def _principal_source(principal: dict) -> str:
@@ -62,6 +74,28 @@ def _fetch_services_last_accessed(iam, job_id: str) -> list[dict]:
         marker = response["Marker"]
 
 
+def _collect_one(iam, principal: dict) -> tuple[str, dict | None, CollectionStatus]:
+    """The exact existing per-principal sequence (generate -> poll -> paginate),
+    unchanged — only ever called from a worker thread, never mutates any
+    state shared with other principals, and never raises: any failure here
+    becomes that principal's own CollectionStatus so it can never abort
+    (or be blamed on) another principal's collection.
+    """
+    source = _principal_source(principal)
+    try:
+        job_id = iam.generate_service_last_accessed_details(Arn=principal["id"])["JobId"]
+        services = _fetch_services_last_accessed(iam, job_id)
+    except (ClientError, BotoCoreError, RuntimeError, TimeoutError) as exc:
+        return principal["id"], None, failed(source, str(exc))
+
+    principal_data = {
+        "principal_name": principal["name"],
+        "principal_type": principal["type"],
+        "services_last_accessed": services,
+    }
+    return principal["id"], principal_data, ok(source, {"services": len(services)})
+
+
 def collect(session: boto3.Session, principals: list[dict]) -> tuple[dict, list[CollectionStatus]]:
     """Fetch service last-accessed evidence for each given principal.
 
@@ -69,25 +103,27 @@ def collect(session: boto3.Session, principals: list[dict]) -> tuple[dict, list[
     drawn from the normalized output. Returns evidence keyed by principal id,
     plus one CollectionStatus per principal — a principal with zero services
     is a successful, empty result, not a failure.
+
+    Principals are processed through a bounded thread pool (MAX_WORKERS) —
+    each principal's job is independent, so this only changes *when* each
+    one runs, never what is collected. Results are placed back by the
+    principal's original list index, not completion order, so the returned
+    statuses list stays in the same order as `principals` regardless of
+    which job happens to finish first.
     """
     iam = session.client("iam")
     data: dict[str, dict] = {}
+    results: list[tuple[str, dict | None, CollectionStatus] | None] = [None] * len(principals)
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_index = {executor.submit(_collect_one, iam, principal): i for i, principal in enumerate(principals)}
+        for future in as_completed(future_to_index):
+            results[future_to_index[future]] = future.result()
+
     statuses: list[CollectionStatus] = []
-
-    for principal in principals:
-        source = _principal_source(principal)
-        try:
-            job_id = iam.generate_service_last_accessed_details(Arn=principal["id"])["JobId"]
-            services = _fetch_services_last_accessed(iam, job_id)
-        except (ClientError, BotoCoreError, RuntimeError, TimeoutError) as exc:
-            statuses.append(failed(source, str(exc)))
-            continue
-
-        data[principal["id"]] = {
-            "principal_name": principal["name"],
-            "principal_type": principal["type"],
-            "services_last_accessed": services,
-        }
-        statuses.append(ok(source, {"services": len(services)}))
+    for principal_id, principal_data, status in results:
+        statuses.append(status)
+        if principal_data is not None:
+            data[principal_id] = principal_data
 
     return data, statuses

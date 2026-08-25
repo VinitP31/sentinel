@@ -7,6 +7,7 @@ in-memory finding/evidence-package dicts only.
 
 import copy
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -14,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 from openai import APIConnectionError, OpenAIError
 
-from src.ai.explain import ModelExplanation, _finding_id, explain_findings
+from src.ai.explain import MAX_WORKERS, ModelExplanation, _finding_id, explain_findings
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -235,6 +236,113 @@ def test_findings_json_byte_for_byte_unchanged(tmp_path):
 
     after = findings_path.read_bytes()
     assert before == after
+
+
+def test_exactly_five_workers_configured():
+    assert MAX_WORKERS == 5
+
+
+def test_all_findings_processed_with_one_call_each():
+    findings = [make_finding(policy_id=f"pol-{i}") for i in range(7)]
+    evidence = make_evidence_package(findings[0]["principal"]["id"])
+    client = fake_client()
+
+    explanations, status = explain_findings(findings, evidence, client=client)
+
+    assert status.succeeded
+    assert len(explanations) == 7
+    assert client.chat.completions.parse.call_count == 7
+
+
+def test_output_order_matches_input_order_regardless_of_completion_order():
+    findings = [
+        make_finding(policy_id=f"pol-{i}", principal_id=f"arn:aws:iam::123:user/p{i}", principal_name=f"p{i}")
+        for i in range(6)
+    ]
+    evidence = {"packages": {}}
+    for finding in findings:
+        evidence["packages"].update(make_evidence_package(finding["principal"]["id"])["packages"])
+
+    # Deliberately complete out of order: worker N sleeps for a duration
+    # inversely related to its index, so later-submitted findings finish
+    # first. If the implementation returned completion order instead of
+    # restoring original order, this would fail.
+    completion_order = []
+    lock = threading.Lock()
+
+    def delayed_parse(*args, **kwargs):
+        payload = json.loads(kwargs["messages"][1]["content"])
+        principal_name = payload["finding"]["principal"]["name"]
+        index = int(principal_name[1:])
+        # Reverse the natural completion order relative to submission order.
+        event = threading.Event()
+        event.wait(timeout=(len(findings) - index) * 0.02)
+        with lock:
+            completion_order.append(index)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=VALID_EXPLANATION, refusal=None))]
+        )
+
+    client = MagicMock()
+    client.chat.completions.parse.side_effect = delayed_parse
+
+    explanations, status = explain_findings(findings, evidence, client=client)
+
+    assert status.succeeded
+    assert [e["principal"]["name"] for e in explanations] == [f["principal"]["name"] for f in findings]
+    # Sanity check the test actually exercised out-of-order completion.
+    assert completion_order != sorted(completion_order)
+
+
+def test_multiple_requests_execute_concurrently():
+    """Prove overlap deterministically: two workers must both be inside the
+    mocked API call at the same time, synchronized with a Barrier rather
+    than wall-clock timing."""
+    barrier = threading.Barrier(2, timeout=5)
+
+    def blocking_parse(*args, **kwargs):
+        barrier.wait()  # only returns once both workers have reached this point
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=VALID_EXPLANATION, refusal=None))]
+        )
+
+    client = MagicMock()
+    client.chat.completions.parse.side_effect = blocking_parse
+
+    findings = [
+        make_finding(policy_id=f"pol-{i}", principal_id=f"arn:aws:iam::123:user/p{i}", principal_name=f"p{i}")
+        for i in range(2)
+    ]
+    evidence = {"packages": {}}
+    for finding in findings:
+        evidence["packages"].update(make_evidence_package(finding["principal"]["id"])["packages"])
+
+    explanations, status = explain_findings(findings, evidence, client=client)
+
+    assert status.succeeded
+    assert len(explanations) == 2
+
+
+def test_failure_associated_with_correct_finding_and_truncates_at_first_index():
+    findings = [
+        make_finding(policy_id="pol-0", principal_id="arn:aws:iam::123:user/p0", principal_name="p0"),
+        make_finding(policy_id="pol-1", principal_id="arn:aws:iam::123:user/p1", principal_name="p1"),
+        make_finding(policy_id="pol-2", principal_id="arn:aws:iam::123:user/p2", principal_name="p2"),
+    ]
+    evidence = {"packages": {}}
+    for finding in findings[:2]:  # p2's evidence package deliberately missing
+        evidence["packages"].update(make_evidence_package(finding["principal"]["id"])["packages"])
+
+    client = fake_client()
+
+    explanations, status = explain_findings(findings, evidence, client=client)
+
+    assert not status.succeeded
+    assert "p2" in status.error
+    assert "missing evidence package" in status.error
+    # Failure is at index 2 (last), so both earlier explanations are kept
+    # and returned in original order.
+    assert [e["principal"]["name"] for e in explanations] == ["p0", "p1"]
 
 
 def test_no_aws_import_in_ai_layer():

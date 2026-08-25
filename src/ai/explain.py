@@ -14,6 +14,7 @@ model only fills in the explanatory fields.
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 from openai import OpenAI, OpenAIError
@@ -23,6 +24,7 @@ from src import config
 from src.util.status import CollectionStatus, failed, ok
 
 SOURCE = "ai_explanations"
+MAX_WORKERS = 5
 
 SYSTEM_PROMPT = """You explain a single already-decided IAM security finding from an audit \
 connector. The finding was produced by deterministic code and is not open for \
@@ -85,6 +87,42 @@ def _prompt_payload(finding: dict, principal_package: dict) -> str:
     return json.dumps({"finding": finding, "principal_evidence": principal_package}, default=str)
 
 
+def _explain_one(client: OpenAI, finding: dict, packages: dict) -> dict:
+    """Produce one explanation, or raise with a message identifying the finding.
+
+    Runs in a worker thread — must not mutate any shared state.
+    """
+    principal_id = finding["principal"]["id"]
+    finding_id = _finding_id(finding)
+    principal_package = packages.get(principal_id)
+
+    if principal_package is None:
+        raise RuntimeError(f"missing evidence package for principal {principal_id} (finding {finding_id})")
+
+    try:
+        response = client.chat.completions.parse(
+            model=config.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _prompt_payload(finding, principal_package)},
+            ],
+            response_format=ModelExplanation,
+        )
+    except OpenAIError as exc:
+        raise RuntimeError(f"OpenAI API error for finding {finding_id}: {exc}") from exc
+
+    message = response.choices[0].message
+    if message.parsed is None:
+        raise RuntimeError(f"model returned invalid/refused output for finding {finding_id}: {message.refusal}")
+
+    return {
+        "finding_id": finding_id,
+        "rule": finding["rule"],
+        "principal": finding["principal"],
+        **message.parsed.model_dump(),
+    }
+
+
 def explain_findings(
     findings: list[dict],
     evidence_package: dict,
@@ -92,10 +130,20 @@ def explain_findings(
 ) -> tuple[list[dict], CollectionStatus]:
     """Produce one validated explanation per finding.
 
-    Zero findings is a successful, empty result — not a failure. Stops at
-    the first missing-evidence, API, or invalid-output problem and reports
-    it as a failure without touching findings.json; explanations already
-    produced before that point are still returned.
+    Zero findings is a successful, empty result — not a failure. Requests
+    for all findings are submitted concurrently (bounded to MAX_WORKERS
+    workers) so independent, blocking API calls overlap instead of
+    serializing. Results are then reassembled in original finding order —
+    completion order has no effect on the returned order.
+
+    Failure handling is deterministic despite concurrent completion: after
+    every submitted request has finished, the result set is walked in
+    original finding order and the run is truncated at the *first* finding
+    (by that order) that failed, exactly as the previous sequential
+    implementation stopped at the first failure it encountered. Explanations
+    for findings before that point are still returned; any successes that
+    happened to complete for findings after it are discarded, so the
+    returned list is always a prefix of the input order.
     """
     if not findings:
         return [], ok(SOURCE, {"explanations": 0})
@@ -107,43 +155,26 @@ def explain_findings(
             return [], failed(SOURCE, f"could not construct OpenAI client: {exc}")
 
     packages = evidence_package.get("packages", {})
-    explanations: list[dict] = []
+    results: list[dict | None] = [None] * len(findings)
+    errors: list[str | None] = [None] * len(findings)
 
-    for finding in findings:
-        principal_id = finding["principal"]["id"]
-        finding_id = _finding_id(finding)
-        principal_package = packages.get(principal_id)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_index = {
+            executor.submit(_explain_one, client, finding, packages): index
+            for index, finding in enumerate(findings)
+        }
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                results[index] = future.result()
+            except RuntimeError as exc:
+                errors[index] = str(exc)
 
-        if principal_package is None:
-            return explanations, failed(
-                SOURCE, f"missing evidence package for principal {principal_id} (finding {finding_id})"
-            )
+    first_failed_index = next((i for i, err in enumerate(errors) if err is not None), None)
 
-        try:
-            response = client.chat.completions.parse(
-                model=config.OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": _prompt_payload(finding, principal_package)},
-                ],
-                response_format=ModelExplanation,
-            )
-        except OpenAIError as exc:
-            return explanations, failed(SOURCE, f"OpenAI API error for finding {finding_id}: {exc}")
+    if first_failed_index is None:
+        explanations = results  # every index succeeded
+        return explanations, ok(SOURCE, {"explanations": len(explanations)})
 
-        message = response.choices[0].message
-        if message.parsed is None:
-            return explanations, failed(
-                SOURCE, f"model returned invalid/refused output for finding {finding_id}: {message.refusal}"
-            )
-
-        explanations.append(
-            {
-                "finding_id": finding_id,
-                "rule": finding["rule"],
-                "principal": finding["principal"],
-                **message.parsed.model_dump(),
-            }
-        )
-
-    return explanations, ok(SOURCE, {"explanations": len(explanations)})
+    explanations = results[:first_failed_index]
+    return explanations, failed(SOURCE, errors[first_failed_index])
