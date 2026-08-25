@@ -1,6 +1,7 @@
 """Entry point. Runs the pipeline end to end and writes each stage's output to disk."""
 
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,12 +40,23 @@ def _stage(number: int, title: str) -> None:
     _rule("-")
 
 
-def _ok(summary: str = "") -> None:
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes, secs = divmod(int(round(seconds)), 60)
+    return f"{minutes}m {secs}s"
+
+
+def _ok(summary: str = "", duration_seconds: float | None = None) -> None:
     print(f"  ✓ OK{'  ' + summary if summary else ''}")
+    if duration_seconds is not None:
+        print(f"  Duration: {_format_duration(duration_seconds)}")
 
 
-def _failed(error: str) -> None:
+def _failed(error: str, duration_seconds: float | None = None) -> None:
     print(f"  ✗ FAILED — {error}", file=sys.stderr)
+    if duration_seconds is not None:
+        print(f"  Duration: {_format_duration(duration_seconds)}")
 
 
 def _prompt(label: str, default: str, empty_hint: str = "") -> str:
@@ -53,7 +65,10 @@ def _prompt(label: str, default: str, empty_hint: str = "") -> str:
     return answer or default
 
 
-def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
+TOTAL_PIPELINE_STAGES = 9  # the stages run_pipeline itself executes; stage 1 (auth) happens outside it
+
+
+def run_pipeline(session, identity: dict, output_dir: Path, progress_callback=None) -> dict:
     """Run stages 2-10 of the audit against an already-authenticated session.
 
     Callable for any boto3.Session — profile-based or assumed-role — since
@@ -61,9 +76,17 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
     Writes exactly the same files as before this function existed, rooted
     under output_dir instead of the fixed module-level config paths, so a
     caller can point multiple independent runs at separate output trees.
+
+    progress_callback, if given, is called as
+    progress_callback(stage_number, total_stages, stage_name, status=..., duration_seconds=...)
+    at the same points _stage()/_ok()/_failed() already print to the
+    terminal — purely additive, changes no pipeline behavior, decision, or
+    output file. status is "running", "completed", or "failed".
     """
     started = datetime.now(timezone.utc)
+    pipeline_started_at = time.perf_counter()
     statuses: list[CollectionStatus] = []
+    stage_timings: list[dict] = []
 
     raw_dir = output_dir / "raw"
     normalized_dir = output_dir / "normalized"
@@ -75,7 +98,18 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
 
     result: dict = {"identity": identity}
 
+    def _record_stage(name: str, stage_start: float) -> float:
+        duration = time.perf_counter() - stage_start
+        stage_timings.append({"stage": name, "duration_seconds": duration})
+        return duration
+
+    def _notify(stage_number: int, stage_name: str, status: str, duration_seconds: float | None = None) -> None:
+        if progress_callback is not None:
+            progress_callback(stage_number, TOTAL_PIPELINE_STAGES, stage_name, status=status, duration_seconds=duration_seconds)
+
     _stage(2, "IAM Configuration Collection")
+    _notify(2, "IAM Configuration Collection", "running")
+    stage_start = time.perf_counter()
     raw_iam, status = iam_collector.collect(session)
     statuses.append(status)
 
@@ -84,24 +118,36 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
         for section, count in status.record_counts.items():
             print(f"  {section}: {count}")
         print(f"  Pages fetched: {status.pages_fetched}")
-        _ok(f"-> {path.relative_to(config.PROJECT_ROOT)}")
+        iam_duration = _record_stage("IAM Configuration Collection", stage_start)
+        _ok(f"-> {path.relative_to(config.PROJECT_ROOT)}", iam_duration)
+        _notify(2, "IAM Configuration Collection", "completed", iam_duration)
 
         _stage(3, "IAM Normalization")
+        _notify(3, "IAM Normalization", "running")
+        stage_start = time.perf_counter()
         normalized = normalize(raw_iam)
         print(f"  policies: {len(normalized['policies'])}, permissions: {len(normalized['permissions'])}")
         print(f"  attachments (direct/inline): {len(normalized['attachments'])}")
-        _ok()
+        normalization_duration = _record_stage("IAM Normalization", stage_start)
+        _ok(duration_seconds=normalization_duration)
+        _notify(3, "IAM Normalization", "completed", normalization_duration)
 
         # Resolves group-inherited access on top of the same attachment model.
         _stage(4, "Group Inheritance")
+        _notify(4, "Group Inheritance", "running")
+        stage_start = time.perf_counter()
         normalized = resolve_group_inheritance(normalized)
         normalized_path = write_json(normalized_dir / "iam.json", normalized)
         print(f"  memberships: {len(normalized['memberships'])}")
         print(f"  attachments (incl. group-inherited): {len(normalized['attachments'])}")
-        _ok(f"-> {normalized_path.relative_to(config.PROJECT_ROOT)}")
+        group_inheritance_duration = _record_stage("Group Inheritance", stage_start)
+        _ok(f"-> {normalized_path.relative_to(config.PROJECT_ROOT)}", group_inheritance_duration)
+        _notify(4, "Group Inheritance", "completed", group_inheritance_duration)
 
         # One last-accessed job per user/role.
         _stage(5, "Last Accessed Evidence")
+        _notify(5, "Last Accessed Evidence", "running")
+        stage_start = time.perf_counter()
         principals = [
             {"id": p["id"], "name": p["name"], "type": p["type"]}
             for p in normalized["users"] + normalized["roles"]
@@ -114,31 +160,55 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
         for s in last_accessed_statuses:
             if not s.succeeded:
                 _failed(f"{s.source}: {s.error}")
-        _ok(f"{succeeded}/{len(last_accessed_statuses)} principals -> {last_accessed_path.relative_to(config.PROJECT_ROOT)}")
+        last_accessed_duration = _record_stage("Last Accessed Evidence", stage_start)
+        _ok(
+            f"{succeeded}/{len(last_accessed_statuses)} principals -> {last_accessed_path.relative_to(config.PROJECT_ROOT)}",
+            last_accessed_duration,
+        )
+        _notify(
+            5,
+            "Last Accessed Evidence",
+            "completed" if succeeded == len(last_accessed_statuses) else "failed",
+            last_accessed_duration,
+        )
 
         # Built from normalized data only.
         _stage(7, "Relationship Graph")
+        _notify(7, "Relationship Graph", "running")
+        stage_start = time.perf_counter()
         graph = build_graph(normalized)
         graph_path = write_json(graph_dir / "graph.json", nx.node_link_data(graph))
         print(f"  nodes: {graph.number_of_nodes()}, edges: {graph.number_of_edges()}")
-        _ok(f"-> {graph_path.relative_to(config.PROJECT_ROOT)}")
+        relationship_graph_duration = _record_stage("Relationship Graph", stage_start)
+        _ok(f"-> {graph_path.relative_to(config.PROJECT_ROOT)}", relationship_graph_duration)
+        _notify(7, "Relationship Graph", "completed", relationship_graph_duration)
 
         # One account-wide sweep, not per-principal.
         _stage(8, "CloudTrail Event History")
+        _notify(8, "CloudTrail Event History", "running")
+        stage_start = time.perf_counter()
         cloudtrail_data, cloudtrail_status = cloudtrail_collector.collect(session, config.CLOUDTRAIL_LOOKBACK_DAYS)
         statuses.append(cloudtrail_status)
 
         cloudtrail_path = write_json(raw_dir / "cloudtrail_events.json", cloudtrail_data)
+        cloudtrail_duration = _record_stage("CloudTrail Event History", stage_start)
         if cloudtrail_status.succeeded:
             window = cloudtrail_data["evidence_window"]
             print(f"  region: {cloudtrail_data['region']}, lookback: {window['lookback_days']} days")
-            _ok(f"{cloudtrail_status.record_counts['events']} events -> {cloudtrail_path.relative_to(config.PROJECT_ROOT)}")
+            _ok(
+                f"{cloudtrail_status.record_counts['events']} events -> {cloudtrail_path.relative_to(config.PROJECT_ROOT)}",
+                cloudtrail_duration,
+            )
+            _notify(8, "CloudTrail Event History", "completed", cloudtrail_duration)
         else:
-            _failed(cloudtrail_status.error)
+            _failed(cloudtrail_status.error, cloudtrail_duration)
+            _notify(8, "CloudTrail Event History", "failed", cloudtrail_duration)
 
         # Needs the last-accessed, graph and CloudTrail evidence above, hence
         # printed after them here.
         _stage(6, "Deterministic Security Analysis")
+        _notify(6, "Deterministic Security Analysis", "running")
+        stage_start = time.perf_counter()
         findings = rules.run_all(normalized, last_accessed_data, cloudtrail_data)
 
         # Indirect privilege path also needs the graph, evaluated here
@@ -151,7 +221,12 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
             by_rule[finding["rule"]] = by_rule.get(finding["rule"], 0) + 1
         for rule_name, count in by_rule.items():
             print(f"  {rule_name}: {count}")
-        _ok(f"{len(findings)} findings -> {findings_path.relative_to(config.PROJECT_ROOT)}")
+        deterministic_analysis_duration = _record_stage("Deterministic Security Analysis", stage_start)
+        _ok(
+            f"{len(findings)} findings -> {findings_path.relative_to(config.PROJECT_ROOT)}",
+            deterministic_analysis_duration,
+        )
+        _notify(6, "Deterministic Security Analysis", "completed", deterministic_analysis_duration)
 
         # Demo visualization — simple risk overview, colored by the findings
         # above. Renders the same graph object, never mutates it.
@@ -160,6 +235,8 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
 
         # External-access findings, then the per-principal evidence package.
         _stage(9, "Access Analyzer & Evidence Package")
+        _notify(9, "Access Analyzer & Evidence Package", "running")
+        stage_start = time.perf_counter()
         analyzer_data, analyzer_status = access_analyzer_collector.collect(session)
         statuses.append(analyzer_status)
 
@@ -177,21 +254,36 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
         )
         evidence_path = write_json(evidence_dir / "evidence_package.json", evidence_package)
         print(f"  evidence packages: {len(evidence_package['packages'])}")
-        _ok(f"-> {analyzer_path.relative_to(config.PROJECT_ROOT)}, {evidence_path.relative_to(config.PROJECT_ROOT)}")
+        access_analyzer_duration = _record_stage("Access Analyzer & Evidence Package", stage_start)
+        _ok(
+            f"-> {analyzer_path.relative_to(config.PROJECT_ROOT)}, {evidence_path.relative_to(config.PROJECT_ROOT)}",
+            access_analyzer_duration,
+        )
+        _notify(
+            9,
+            "Access Analyzer & Evidence Package",
+            "completed" if analyzer_status.succeeded else "failed",
+            access_analyzer_duration,
+        )
 
         # AI explanations of the findings above — findings.json itself is only read, never modified here.
         _stage(10, "AI Security Explanation")
+        _notify(10, "AI Security Explanation", "running")
+        stage_start = time.perf_counter()
         explanations, ai_status = explain_findings(findings, evidence_package)
         statuses.append(ai_status)
 
         explanations_path = write_json(ai_dir / "explanations.json", explanations)
         write_json(ai_dir / "ai_status.json", ai_status.as_dict())
 
+        ai_duration = _record_stage("AI Security Explanation", stage_start)
         if ai_status.succeeded:
-            _ok(f"{ai_status.record_counts['explanations']} explanations -> {explanations_path.relative_to(config.PROJECT_ROOT)}")
+            _ok(f"{ai_status.record_counts['explanations']} explanations -> {explanations_path.relative_to(config.PROJECT_ROOT)}", ai_duration)
+            _notify(10, "AI Security Explanation", "completed", ai_duration)
         else:
-            _failed(ai_status.error)
+            _failed(ai_status.error, ai_duration)
             print(f"  ({len(explanations)} explanation(s) generated before the failure)", file=sys.stderr)
+            _notify(10, "AI Security Explanation", "failed", ai_duration)
 
         # Demo report — presentation only; reads outputs already written above, recomputes nothing.
         report_context = {
@@ -209,6 +301,7 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
         }
         rendered_report_path = render_report(report_context, graph_html_path, report_path)
 
+        total_duration = time.perf_counter() - pipeline_started_at
         _header("AUDIT COMPLETE")
         print(f"  Report (open this): {rendered_report_path.relative_to(config.PROJECT_ROOT)}")
         print(f"  Graph (data)      : {graph_path.relative_to(config.PROJECT_ROOT)}")
@@ -216,6 +309,7 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
         print(f"  Findings          : {findings_path.relative_to(config.PROJECT_ROOT)}")
         print(f"  Evidence package  : {evidence_path.relative_to(config.PROJECT_ROOT)}")
         print(f"  AI explanations   : {explanations_path.relative_to(config.PROJECT_ROOT)}")
+        print(f"  Total audit time  : {_format_duration(total_duration)}")
         print()
 
         result.update(
@@ -230,7 +324,9 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
             }
         )
     else:
-        _failed(f"IAM collection: {status.error}")
+        iam_failure_duration = _record_stage("IAM Configuration Collection", stage_start)
+        _failed(f"IAM collection: {status.error}", iam_failure_duration)
+        _notify(2, "IAM Configuration Collection", "failed", iam_failure_duration)
 
     # A run with gaps must be distinguishable from a complete one.
     collection_report = {
@@ -244,6 +340,10 @@ def run_pipeline(session, identity: dict, output_dir: Path) -> dict:
 
     result["complete"] = collection_report["complete"]
     result["statuses"] = statuses
+    result["timings"] = {
+        "stages": stage_timings,
+        "total_duration_seconds": time.perf_counter() - pipeline_started_at,
+    }
     return result
 
 
@@ -256,18 +356,19 @@ def run() -> int:
     expected_account_id = _prompt("Expected account ID (optional)", config.EXPECTED_ACCOUNT_ID or "", "none") or None
 
     _stage(1, "Authentication & Account Verification")
+    stage_start = time.perf_counter()
     try:
         session = auth.get_session(profile_name, region_name)
         identity = auth.verify_identity(session, expected_account_id)
     except auth.AuthError as exc:
-        _failed(str(exc))
+        _failed(str(exc), time.perf_counter() - stage_start)
         return 1
 
     print(f"  Profile     : {profile_name or '(default credential chain)'}")
     print(f"  Account ID  : {identity['account_id']}")
     print(f"  Identity    : {identity['arn']}")
     print(f"  Region      : {identity['region']}")
-    _ok("connected")
+    _ok("connected", time.perf_counter() - stage_start)
 
     result = run_pipeline(session, identity, config.OUTPUT_DIR)
 

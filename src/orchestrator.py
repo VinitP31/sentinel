@@ -16,7 +16,7 @@ from pathlib import Path
 
 from src import config
 from src.aws import auth, organizations_collector
-from src.main import run_pipeline
+from src.main import TOTAL_PIPELINE_STAGES, run_pipeline
 from src.report.multi_account import render_multi_account_report
 from src.util.io import write_json
 
@@ -27,12 +27,15 @@ TARGET_ACCOUNTS = {
 ROLE_NAME = "AuditReadOnlyRole"
 
 
-def audit_account(base_session, label: str, account_id: str) -> dict:
+def audit_account(base_session, label: str, account_id: str, progress_callback=None) -> dict:
     """Assume the role in one account, run the existing pipeline, never raise.
 
     A failure here — at authentication or during collection — is returned
     as a result record, not an exception, so one account's problem can
     never stop the other account from being audited.
+
+    progress_callback, if given, is forwarded unchanged to run_pipeline —
+    additive only, this function's own behavior/return shape is unaffected.
     """
     role_arn = f"arn:aws:iam::{account_id}:role/{ROLE_NAME}"
 
@@ -49,7 +52,12 @@ def audit_account(base_session, label: str, account_id: str) -> dict:
         }
 
     try:
-        pipeline_result = run_pipeline(target_session, identity, config.account_output_root(label))
+        pipeline_result = run_pipeline(
+            target_session,
+            identity,
+            config.account_output_root(label),
+            progress_callback=_with_account_label(progress_callback, label),
+        )
     except Exception as exc:  # noqa: BLE001 — a pipeline failure must not abort the other account
         return {
             "account_label": label,
@@ -68,6 +76,21 @@ def audit_account(base_session, label: str, account_id: str) -> dict:
     }
 
 
+def _with_account_label(progress_callback, label: str):
+    """Wrap a caller-supplied progress_callback so every stage event it
+    forwards to run_pipeline also carries which account it's for — without
+    run_pipeline itself needing to know about accounts at all."""
+    if progress_callback is None:
+        return None
+
+    def _wrapped(stage_number, total_stages, stage_name, status, duration_seconds=None):
+        progress_callback(
+            stage_number, total_stages, stage_name, status=status, duration_seconds=duration_seconds, account_label=label
+        )
+
+    return _wrapped
+
+
 def _tag_findings(findings_path: Path, account_id: str, account_name: str) -> list[dict]:
     """Read one account's untouched findings.json and return tagged copies.
 
@@ -79,11 +102,21 @@ def _tag_findings(findings_path: Path, account_id: str, account_name: str) -> li
     return [{**finding, "account_id": account_id, "account_name": account_name} for finding in original_findings]
 
 
-def audit_all_accounts(base_session) -> dict:
-    """Discover accounts (for confirmation), then audit exactly the configured targets."""
+def audit_all_accounts(base_session, progress_callback=None) -> dict:
+    """Discover accounts (for confirmation), then audit exactly the configured targets.
+
+    progress_callback, if given, additionally receives one account-transition
+    event per account (stage_number=None, account_label=<label>) right before
+    that account's own stage events start arriving — the same callback then
+    also receives every stage event for that account, tagged with its label.
+    """
     _discovered, organizations_status = organizations_collector.collect(base_session)
 
-    results = [audit_account(base_session, label, account_id) for label, account_id in TARGET_ACCOUNTS.items()]
+    results = []
+    for label, account_id in TARGET_ACCOUNTS.items():
+        if progress_callback is not None:
+            progress_callback(None, TOTAL_PIPELINE_STAGES, f"Auditing {label}", status="running", account_label=label)
+        results.append(audit_account(base_session, label, account_id, progress_callback=progress_callback))
 
     combined_findings: list[dict] = []
     for result in results:

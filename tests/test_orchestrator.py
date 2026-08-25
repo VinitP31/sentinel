@@ -118,7 +118,7 @@ def test_audit_all_accounts_aggregate_success(tmp_path, monkeypatch):
     prod_path.write_text(json.dumps(prod_findings))
     dev_path.write_text(json.dumps(dev_findings))
 
-    def fake_audit_account(base_session, label, account_id):
+    def fake_audit_account(base_session, label, account_id, progress_callback=None):
         path = prod_path if label == "PROD" else dev_path
         return {
             "account_label": label,
@@ -148,7 +148,7 @@ def test_audit_all_accounts_mixed_success_and_failure(tmp_path, monkeypatch):
     dev_path = tmp_path / "dev_findings.json"
     dev_path.write_text(json.dumps(dev_findings))
 
-    def fake_audit_account(base_session, label, account_id):
+    def fake_audit_account(base_session, label, account_id, progress_callback=None):
         if label == "PROD":
             return {
                 "account_label": "PROD",
@@ -231,7 +231,7 @@ def test_total_findings_equals_length_of_combined_findings(tmp_path, monkeypatch
     prod_path.write_text(json.dumps(prod_findings))
     dev_path.write_text(json.dumps(dev_findings))
 
-    def fake_audit_account(base_session, label, account_id):
+    def fake_audit_account(base_session, label, account_id, progress_callback=None):
         path = prod_path if label == "PROD" else dev_path
         return {
             "account_label": label,
@@ -265,7 +265,7 @@ def test_audit_all_accounts_persists_combined_findings_json(tmp_path, monkeypatc
     prod_path.write_text(json.dumps(prod_findings))
     dev_path.write_text(json.dumps(dev_findings))
 
-    def fake_audit_account(base_session, label, account_id):
+    def fake_audit_account(base_session, label, account_id, progress_callback=None):
         path = prod_path if label == "PROD" else dev_path
         return {
             "account_label": label,
@@ -288,3 +288,62 @@ def test_audit_all_accounts_persists_combined_findings_json(tmp_path, monkeypatc
 
     tags = {f["account_name"] for f in loaded["findings"]}
     assert tags == {"PROD", "DEV"}
+
+
+# --- progress_callback ------------------------------------------------------
+
+
+def test_audit_account_forwards_progress_callback_tagged_with_account_label():
+    base_session = make_session()
+    target_session = make_session()
+    identity = {"account_id": "328865868092", "arn": "arn:...", "region": "us-east-1"}
+    events = []
+
+    def fake_run_pipeline(session, identity, output_dir, progress_callback=None):
+        progress_callback(2, 9, "IAM Configuration Collection", status="running")
+        progress_callback(2, 9, "IAM Configuration Collection", status="completed", duration_seconds=1.23)
+        return {"finding_count": 0, "findings_path": "/tmp/f.json"}
+
+    with patch("src.orchestrator.auth.assume_role", return_value=target_session), \
+         patch("src.orchestrator.auth.verify_identity", return_value=identity), \
+         patch("src.orchestrator.run_pipeline", side_effect=fake_run_pipeline):
+        orchestrator.audit_account(
+            base_session, "PROD", "328865868092",
+            progress_callback=lambda *a, **kw: events.append((a, kw)),
+        )
+
+    assert len(events) == 2
+    for args, kwargs in events:
+        assert kwargs["account_label"] == "PROD"
+
+
+def test_audit_all_accounts_fires_account_transition_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator.config, "OUTPUT_DIR", tmp_path)
+    base_session = _mgmt_session_with_account()
+    events = []
+
+    def fake_audit_account(base_session, label, account_id, progress_callback=None):
+        return {"account_label": label, "account_id": account_id, "status": "success",
+                "finding_count": 0, "pipeline_result": {}}
+
+    with patch("src.orchestrator.organizations_collector.collect", return_value=({}, ok("organizations", {"accounts": 3}))), \
+         patch("src.orchestrator.audit_account", side_effect=fake_audit_account):
+        orchestrator.audit_all_accounts(base_session, progress_callback=lambda *a, **kw: events.append((a, kw)))
+
+    account_transition_labels = [kw["account_label"] for a, kw in events if a[0] is None]
+    assert account_transition_labels == ["PROD", "DEV"]
+
+
+def test_no_progress_callback_is_still_optional_and_does_not_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator.config, "OUTPUT_DIR", tmp_path)
+    base_session = _mgmt_session_with_account()
+
+    def fake_audit_account(base_session, label, account_id, progress_callback=None):
+        return {"account_label": label, "account_id": account_id, "status": "success",
+                "finding_count": 0, "pipeline_result": {}}
+
+    with patch("src.orchestrator.organizations_collector.collect", return_value=({}, ok("organizations", {"accounts": 3}))), \
+         patch("src.orchestrator.audit_account", side_effect=fake_audit_account):
+        aggregate = orchestrator.audit_all_accounts(base_session)
+
+    assert aggregate["accounts_succeeded"] == 2
