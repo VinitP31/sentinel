@@ -2,15 +2,58 @@
 
 ## Purpose
 
-This document records what was configured in the AWS test account for the IAM security audit POC, what each item is used for, and the test scenarios created.
+This document records what was configured in AWS for the IAM security audit POC, what each item is used for, and the test scenarios created.
 
 The goal is to provide a simple reference for understanding the AWS-side setup without requiring the reader to know the implementation details.
+
+The POC has since grown from a single AWS account into a multi-account setup. Section 0 below describes the current multi-account structure. Everything from section 1 onward describes the original single-account test account — that account is now audited as one of the two target accounts (`PROD`), and its test scenarios are unchanged.
+
+---
+
+## 0. Multi-Account Setup (current)
+
+Sentinel audits a Management Account plus a fixed set of target accounts.
+
+### Management account
+
+`957728667615`
+
+The identity used to run an audit (the `poc-aws-audit-collector` local credential chain, or temporary credentials pasted/retrieved through the Streamlit UI) authenticates as this account. From here, Sentinel discovers accounts in the Organization and assumes a role into each target account — it never collects IAM data from the Management Account itself.
+
+### Target accounts
+
+| Label | Account ID |
+|---|---|
+| PROD | `328865868092` |
+| DEV | `587762853586` |
+
+This is the original single-account test account described in section 1 onward, plus a second account (`DEV`) set up the same way. The target account list is fixed configuration (`src/orchestrator.py`), not automatic discovery-driven onboarding — Organizations discovery confirms the accounts exist, it does not decide which accounts get audited.
+
+### Read-only audit role
+
+Each target account has a role named `AuditReadOnlyRole`, trusting the Management Account, holding the same read-only IAM/CloudTrail/Access Analyzer permissions as the original `POC-AWS-IAM-Audit-ReadOnly` policy described in section 2. Sentinel assumes this role once per account per audit run; the resulting temporary credentials are used only for that account's pipeline and are discarded once it finishes.
+
+### Organizations discovery
+
+Sentinel calls AWS Organizations from the Management Account to list accounts in the organization. This is a confirmation/logging step — it does not filter or choose which accounts get audited; that list is the fixed `PROD`/`DEV` configuration above.
+
+### Cross-account role assumption
+
+For each target account, Sentinel exchanges the Management Account session for temporary credentials scoped to that account's `AuditReadOnlyRole`, via `sts:AssumeRole`. Each account gets its own separate temporary session — PROD's credentials are never reused for DEV, and vice versa.
+
+### Local POC credential flow
+
+For local development, the Streamlit UI accepts pasted temporary Management Account credentials, or can retrieve them automatically via the local AWS CLI (`aws sts get-session-token`). Credentials are masked by default, can be manually revealed, and are reused for the remainder of their validity window rather than requesting a new set on every click — the UI clearly distinguishes "reuse the still-valid set" from "explicitly generate a new set." Retrieved credentials are also printed to the local terminal for manual verification during development. This printing behavior is a local-development convenience only, not a production credential-handling recommendation, and is disabled automatically outside interactive local use.
+
+### Test/security scenarios
+
+The scenarios below (section 1 onward) were built for the original single-account test account and are unchanged. They now describe the `PROD` target account specifically. `DEV` is set up as a second, independent target account with the same `AuditReadOnlyRole` trust and read-only permissions, so that Sentinel's multi-account behavior (per-account isolation, combined findings tagged by account) has two real accounts to audit.
 
 ---
 
 ## 1. AWS Test Account
 
-The POC was configured in a dedicated AWS test account.
+The POC was originally configured in a single dedicated AWS test account — this is now the `PROD` target account described in section 0.
 
 The primary working region used for the POC is:
 
@@ -37,7 +80,7 @@ An IAM user was created for the connector to use when reading the AWS account.
 
 ### Purpose
 
-This user represents the identity that the future Python connector will use to collect information from the AWS account.
+This user represents the Management Account identity Sentinel uses locally — either directly (single-account CLI path) or as the base session it assumes `AuditReadOnlyRole` from in each target account (multi-account path).
 
 Console access was disabled.
 
@@ -564,7 +607,7 @@ For this test account, the current result is empty.
 
 ## 16. Current AWS Setup Summary
 
-The AWS test environment is prepared for the connector implementation.
+The AWS test environment for the `PROD` target account contains the following.
 
 The setup intentionally contains:
 
@@ -585,4 +628,4 @@ The setup intentionally contains:
 
 No production resources or application workloads were created as part of this setup.
 
-The next stage is to build the Python collector that reads these AWS sources and converts the collected information into the audit model defined for the POC.
+The `DEV` target account (section 0) mirrors the collector-facing parts of this setup — an `AuditReadOnlyRole` with the same read-only permissions — without duplicating the full set of test-user scenarios above.
