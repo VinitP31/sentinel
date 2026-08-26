@@ -1,4 +1,4 @@
-"""Multi-account orchestration: Management Account -> PROD/DEV -> combined findings.
+"""Multi-account orchestration: Management Account -> selected accounts -> combined findings.
 
 Wires together src/aws/auth.py's assume_role, src/aws/organizations_collector.py,
 and src/main.py's run_pipeline — none of which change here. This module adds
@@ -7,8 +7,12 @@ correlation: it only assumes a role per target account, runs the existing,
 unmodified audit pipeline once per account, and combines the results.
 
 Discovery via Organizations confirms/reports what's in the org; it does not
-choose which accounts get audited — that list is the fixed TARGET_ACCOUNTS
-below, matching this POC's approved scope (PROD and DEV only).
+choose which accounts get audited by itself. audit_all_accounts() accepts an
+explicit target_accounts mapping (label -> account_id) from its caller — the
+Streamlit UI builds this from accounts the person actually selected out of
+Organizations discovery (see app.py). TARGET_ACCOUNTS below is kept only as
+the default for callers that don't supply one (e.g. any direct/CLI use of
+this module), so existing behavior is unchanged when no selection is given.
 """
 
 import json
@@ -19,12 +23,28 @@ from src.aws import auth, organizations_collector
 from src.main import TOTAL_PIPELINE_STAGES, run_pipeline
 from src.report.multi_account import render_multi_account_report
 from src.util.io import write_json
+from src.util.status import CollectionStatus
 
 TARGET_ACCOUNTS = {
     "PROD": "328865868092",
     "DEV": "587762853586",
 }
 ROLE_NAME = "AuditReadOnlyRole"
+
+
+def discover_accounts(base_session) -> tuple[list[dict], CollectionStatus]:
+    """Fetch the accounts visible to this Management Account session, for a
+    caller (the UI) that needs to show them and let a person choose which to
+    audit, before any audit runs. Thin reuse of organizations_collector — no
+    second/different discovery mechanism, no filtering or judgment here.
+
+    A caller that gets a result from this function and then calls
+    audit_all_accounts() should pass this same status via that function's
+    organizations_status= argument, so Organizations isn't queried twice for
+    one audit run.
+    """
+    data, status = organizations_collector.collect(base_session)
+    return data.get("accounts", []), status
 
 
 def audit_account(base_session, label: str, account_id: str, progress_callback=None) -> dict:
@@ -102,18 +122,33 @@ def _tag_findings(findings_path: Path, account_id: str, account_name: str) -> li
     return [{**finding, "account_id": account_id, "account_name": account_name} for finding in original_findings]
 
 
-def audit_all_accounts(base_session, progress_callback=None) -> dict:
-    """Discover accounts (for confirmation), then audit exactly the configured targets.
+def audit_all_accounts(
+    base_session,
+    target_accounts: dict[str, str] | None = None,
+    organizations_status: CollectionStatus | None = None,
+    progress_callback=None,
+) -> dict:
+    """Audit target_accounts (label -> account_id), defaulting to TARGET_ACCOUNTS
+    when none is given, so existing callers that don't pick accounts explicitly
+    keep their exact prior behavior.
+
+    organizations_status, if given, is used as-is instead of calling
+    organizations_collector.collect() again — for a caller (the UI) that
+    already discovered accounts via discover_accounts() before this call and
+    would otherwise trigger a second, redundant Organizations API call.
 
     progress_callback, if given, additionally receives one account-transition
     event per account (stage_number=None, account_label=<label>) right before
     that account's own stage events start arriving — the same callback then
     also receives every stage event for that account, tagged with its label.
     """
-    _discovered, organizations_status = organizations_collector.collect(base_session)
+    if organizations_status is None:
+        _discovered, organizations_status = organizations_collector.collect(base_session)
+
+    accounts_to_audit = TARGET_ACCOUNTS if target_accounts is None else target_accounts
 
     results = []
-    for label, account_id in TARGET_ACCOUNTS.items():
+    for label, account_id in accounts_to_audit.items():
         if progress_callback is not None:
             progress_callback(None, TOTAL_PIPELINE_STAGES, f"Auditing {label}", status="running", account_label=label)
         results.append(audit_account(base_session, label, account_id, progress_callback=progress_callback))

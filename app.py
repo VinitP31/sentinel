@@ -1,10 +1,11 @@
 """Sentinel — local Streamlit UI.
 
 Replaces "run a long Python command" with a browser form: paste temporary
-AWS Management Account credentials, click Connect & Audit, see the
-dashboard. This file only wires the UI to the existing, unmodified backend
-— auth.verify_identity and src.orchestrator.audit_all_accounts do all the
-real work, exactly as they already do for the CLI path (src/main.py). The
+AWS Management Account credentials, discover the accounts in the
+organization, select which ones to audit, then see the dashboard. This file
+only wires the UI to the existing, unmodified backend — auth.verify_identity
+and src.orchestrator.discover_accounts/audit_all_accounts do all the real
+work, exactly as they already do for the CLI path (src/main.py). The
 dashboard itself is the primary Sentinel experience: no file:// links, no
 raw JSON, no giant tables — everything renders inside Streamlit, reusing
 the existing graph/report artifacts that src.main.run_pipeline already
@@ -755,6 +756,26 @@ def _retrieve_and_store_credentials() -> None:
         st.session_state["credential_retrieval_error"] = str(exc)
 
 
+def _account_checkbox_label(account: dict) -> str:
+    return f"{account.get('name', '?')} — {account.get('id', '?')} ({account.get('state', '?')})"
+
+
+def _selected_target_accounts(discovered_accounts: list[dict]) -> dict[str, str]:
+    """Build the label -> account_id mapping audit_all_accounts expects, from
+    whichever discovered accounts have their checkbox checked. Two accounts
+    sharing the same name would otherwise collide as dict keys and silently
+    drop one of them, so a colliding label is disambiguated with its account
+    ID rather than allowed to overwrite another selected account.
+    """
+    selected = [a for a in discovered_accounts if st.session_state.get(f"select_account_{a['id']}")]
+    names = [a.get("name") or a["id"] for a in selected]
+    target_accounts: dict[str, str] = {}
+    for account, name in zip(selected, names):
+        label = name if names.count(name) == 1 else f"{name} ({account['id']})"
+        target_accounts[label] = account["id"]
+    return target_accounts
+
+
 def main() -> None:
     st.set_page_config(page_title="Sentinel", layout="wide")
     st.title("Sentinel")
@@ -769,6 +790,9 @@ def main() -> None:
     st.session_state.setdefault("credential_retrieval_error", None)
     st.session_state.setdefault("credentials_retrieved", False)
     st.session_state.setdefault("credential_expiration", None)
+    st.session_state.setdefault("discovered_accounts", None)
+    st.session_state.setdefault("organizations_status", None)
+    st.session_state.setdefault("discovery_error", None)
 
     st.subheader("Connect AWS")
     st.caption("Choose how to connect:")
@@ -814,12 +838,14 @@ def main() -> None:
             st.text_input("Session Token", type=field_type, key="session_token", disabled=True)
             st.caption(f"Expiration: {st.session_state.get('credential_expiration') or '-'}")
 
-    connect_clicked = st.button("Connect & Audit", type="primary")
+    discover_clicked = st.button("Connect & Discover Accounts", type="primary")
 
-    if connect_clicked:
+    if discover_clicked:
         st.session_state["error"] = None
+        st.session_state["discovery_error"] = None
         st.session_state["aggregate"] = None
-        audit_started_at = time.perf_counter()
+        st.session_state["discovered_accounts"] = None
+        st.session_state["organizations_status"] = None
 
         with st.status("Connecting to AWS...", expanded=True) as status:
             try:
@@ -833,31 +859,86 @@ def main() -> None:
                 status.write("Verifying Management Account...")
                 identity = auth.verify_identity(session)
                 status.write(f"Verified Management Account: {identity['account_id']}")
+
                 status.write("Discovering AWS accounts...")
+                discovered_accounts, organizations_status = orchestrator.discover_accounts(session)
+                st.session_state["discovered_accounts"] = discovered_accounts
+                st.session_state["organizations_status"] = organizations_status
 
-                progress_placeholder = status.empty()
-                progress_callback = _make_progress_renderer(progress_placeholder, audit_started_at)
-                aggregate = orchestrator.audit_all_accounts(session, progress_callback=progress_callback)
-
-                st.session_state["aggregate"] = aggregate
-                status.update(label="Audit complete", state="complete", expanded=False)
+                if not organizations_status.succeeded:
+                    st.session_state["discovery_error"] = (
+                        f"Account discovery did not succeed ({organizations_status.error}). "
+                        "No accounts are available to select."
+                    )
+                    status.update(label="Discovery failed", state="error")
+                elif not discovered_accounts:
+                    st.session_state["discovery_error"] = "No accounts were discovered for this Management Account."
+                    status.update(label="No accounts found", state="error")
+                else:
+                    status.update(label=f"Discovered {len(discovered_accounts)} account(s)", state="complete", expanded=False)
             except auth.AuthError:
                 status.update(label="Authentication failed", state="error")
                 st.session_state["error"] = format_auth_error()
             except Exception as exc:  # noqa: BLE001 — surfaced as a clean message, not a raw traceback
-                status.update(label="Audit failed", state="error")
+                status.update(label="Discovery failed", state="error")
                 st.session_state["error"] = format_audit_error(exc)
 
-        if st.session_state.get("aggregate"):
-            completed = st.session_state["aggregate"]
-            total_elapsed = time.perf_counter() - audit_started_at
-            st.success(
-                "**Audit completed successfully**\n\n"
-                f"{len(completed.get('accounts', []))} accounts audited\n\n"
-                f"{completed.get('total_findings', 0)} findings\n\n"
-                f"{completed.get('accounts_failed', 0)} failures\n\n"
-                f"Total audit time: {_format_elapsed(total_elapsed)}"
-            )
+    discovered_accounts = st.session_state.get("discovered_accounts")
+    if discovered_accounts:
+        st.subheader("Select accounts to audit")
+        st.caption("Discovered via AWS Organizations. Nothing is audited until you select accounts and run the audit.")
+        for account in discovered_accounts:
+            st.checkbox(_account_checkbox_label(account), key=f"select_account_{account['id']}", value=False)
+
+        run_clicked = st.button("Run Audit", type="primary")
+
+        if run_clicked:
+            target_accounts = _selected_target_accounts(discovered_accounts)
+            if not target_accounts:
+                st.error("Select at least one account before running the audit.")
+            else:
+                st.session_state["error"] = None
+                st.session_state["aggregate"] = None
+                audit_started_at = time.perf_counter()
+
+                with st.status("Running audit...", expanded=True) as status:
+                    try:
+                        session = build_session(
+                            st.session_state["access_key_id"],
+                            st.session_state["secret_access_key"],
+                            st.session_state["session_token"],
+                            st.session_state["region"],
+                        )
+                        progress_placeholder = status.empty()
+                        progress_callback = _make_progress_renderer(progress_placeholder, audit_started_at)
+                        aggregate = orchestrator.audit_all_accounts(
+                            session,
+                            target_accounts=target_accounts,
+                            organizations_status=st.session_state["organizations_status"],
+                            progress_callback=progress_callback,
+                        )
+
+                        st.session_state["aggregate"] = aggregate
+                        status.update(label="Audit complete", state="complete", expanded=False)
+                    except auth.AuthError:
+                        status.update(label="Authentication failed", state="error")
+                        st.session_state["error"] = format_auth_error()
+                    except Exception as exc:  # noqa: BLE001 — surfaced as a clean message, not a raw traceback
+                        status.update(label="Audit failed", state="error")
+                        st.session_state["error"] = format_audit_error(exc)
+
+                if st.session_state.get("aggregate"):
+                    completed = st.session_state["aggregate"]
+                    total_elapsed = time.perf_counter() - audit_started_at
+                    st.success(
+                        "**Audit completed successfully**\n\n"
+                        f"{len(completed.get('accounts', []))} accounts audited\n\n"
+                        f"{completed.get('total_findings', 0)} findings\n\n"
+                        f"{completed.get('accounts_failed', 0)} failures\n\n"
+                        f"Total audit time: {_format_elapsed(total_elapsed)}"
+                    )
+    elif st.session_state.get("discovery_error"):
+        st.warning(st.session_state["discovery_error"])
 
     if st.session_state.get("error"):
         st.error(st.session_state["error"])

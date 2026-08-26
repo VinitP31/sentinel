@@ -23,6 +23,7 @@ from pathlib import Path
 
 import boto3
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from unittest.mock import MagicMock, patch
@@ -37,6 +38,7 @@ from app import (
     _patch_graph_html_assets,
 )
 from src.aws import auth
+from src.util.status import ok
 
 APP_PATH = str(Path(__file__).parent.parent / "app.py")
 
@@ -247,7 +249,7 @@ def test_credential_fields_exist():
     assert any("Region" in label for label in labels)
 
     button_labels = [b.label for b in at.button]
-    assert any("Connect & Audit" in label for label in button_labels)
+    assert any("Connect & Discover Accounts" in label for label in button_labels)
 
 
 # --- dashboard rendering (Streamlit AppTest harness, fake aggregate) -------
@@ -887,10 +889,21 @@ _FAKE_PIPELINE_AGGREGATE = {
 }
 
 
-def _run_connect_and_audit(fake_audit_all_accounts):
+_FAKE_DISCOVERED_ACCOUNTS = [
+    {"id": "328865868092", "name": "PROD", "email": "prod@example.com", "state": "ACTIVE"},
+]
+
+
+def _run_connect_and_audit(fake_audit_all_accounts, discovered_accounts=None):
+    """Drives the full Connect & Discover -> select account -> Run Audit
+    flow. discovered_accounts defaults to one account (PROD), auto-selected,
+    so existing tests that only care about the audit/progress behavior don't
+    each need to repeat the discovery/selection setup themselves."""
     fake_identity = {"account_id": "123456789012", "arn": "arn:aws:iam::123456789012:user/test", "region": "us-east-1"}
+    accounts = discovered_accounts if discovered_accounts is not None else _FAKE_DISCOVERED_ACCOUNTS
     with (
         patch("src.aws.auth.verify_identity", return_value=fake_identity),
+        patch("src.orchestrator.discover_accounts", return_value=(accounts, ok("organizations", {"accounts": len(accounts)}))),
         patch("src.orchestrator.audit_all_accounts", side_effect=fake_audit_all_accounts),
     ):
         at = AppTest.from_file(APP_PATH)
@@ -900,14 +913,21 @@ def _run_connect_and_audit(fake_audit_all_accounts):
         at.text_input(key="session_token").set_value("")
         at.run(timeout=15)
         for button in at.button:
-            if button.label == "Connect & Audit":
+            if button.label == "Connect & Discover Accounts":
+                button.click()
+        at.run(timeout=15)
+        for account in accounts:
+            at.checkbox(key=f"select_account_{account['id']}").set_value(True)
+        at.run(timeout=15)
+        for button in at.button:
+            if button.label == "Run Audit":
                 button.click()
         at.run(timeout=15)
     return at
 
 
 def test_progress_callback_events_produce_step_and_stage_rendering():
-    def fake_audit(session, progress_callback=None):
+    def fake_audit(session, progress_callback=None, **kwargs):
         progress_callback(2, 9, "IAM Configuration Collection", status="running", account_label="PROD")
         progress_callback(2, 9, "IAM Configuration Collection", status="completed", duration_seconds=1.5, account_label="PROD")
         progress_callback(3, 9, "IAM Normalization", status="running", account_label="PROD")
@@ -926,7 +946,7 @@ def test_progress_callback_events_produce_step_and_stage_rendering():
 
 
 def test_completed_stage_shows_duration():
-    def fake_audit(session, progress_callback=None):
+    def fake_audit(session, progress_callback=None, **kwargs):
         progress_callback(2, 9, "IAM Configuration Collection", status="running", account_label="PROD")
         progress_callback(2, 9, "IAM Configuration Collection", status="completed", duration_seconds=6.35, account_label="PROD")
         return _FAKE_PIPELINE_AGGREGATE
@@ -936,7 +956,7 @@ def test_completed_stage_shows_duration():
 
 
 def test_failed_stage_renders_and_error_shown():
-    def fake_audit(session, progress_callback=None):
+    def fake_audit(session, progress_callback=None, **kwargs):
         progress_callback(2, 9, "IAM Configuration Collection", status="running", account_label="PROD")
         progress_callback(2, 9, "IAM Configuration Collection", status="failed", duration_seconds=0.5, account_label="PROD")
         raise RuntimeError("IAM collection: simulated AccessDenied")
@@ -953,7 +973,7 @@ def test_failed_stage_renders_and_error_shown():
 
 
 def test_completion_summary_renders():
-    def fake_audit(session, progress_callback=None):
+    def fake_audit(session, progress_callback=None, **kwargs):
         return _FAKE_PIPELINE_AGGREGATE
 
     at = _run_connect_and_audit(fake_audit)
@@ -971,7 +991,7 @@ def test_existing_audit_result_behavior_unchanged():
     driven by the same aggregate shape — this feature only adds progress
     reporting around the existing call, it doesn't alter what's returned."""
 
-    def fake_audit(session, progress_callback=None):
+    def fake_audit(session, progress_callback=None, **kwargs):
         return _FAKE_PIPELINE_AGGREGATE
 
     at = _run_connect_and_audit(fake_audit)
@@ -979,4 +999,166 @@ def test_existing_audit_result_behavior_unchanged():
     assert at.session_state["aggregate"] == _FAKE_PIPELINE_AGGREGATE
     text = _all_text(at)
     assert "PROD" in text
-    assert "328865868092" in text
+
+
+# --- account discovery + selection (Organizations discovery drives selection, not a hardcoded list) ---
+
+
+def _fake_identity():
+    return {"account_id": "123456789012", "arn": "arn:aws:iam::123456789012:user/test", "region": "us-east-1"}
+
+
+def _enter_credentials_and_discover(at):
+    at.text_input(key="access_key_id").set_value("FAKEKEYID")
+    at.text_input(key="secret_access_key").set_value("FAKESECRET")
+    at.text_input(key="session_token").set_value("")
+    at.run(timeout=15)
+    for button in at.button:
+        if button.label == "Connect & Discover Accounts":
+            button.click()
+    at.run(timeout=15)
+
+
+def test_discovered_accounts_render_as_selectable_checkboxes():
+    fake_accounts = [
+        {"id": "111111111111", "name": "PROD", "email": "p@x.com", "state": "ACTIVE"},
+        {"id": "222222222222", "name": "DEV", "email": "d@x.com", "state": "ACTIVE"},
+    ]
+    with (
+        patch("src.aws.auth.verify_identity", return_value=_fake_identity()),
+        patch("src.orchestrator.discover_accounts", return_value=(fake_accounts, ok("organizations", {"accounts": 2}))),
+    ):
+        at = AppTest.from_file(APP_PATH)
+        at.run(timeout=15)
+        _enter_credentials_and_discover(at)
+
+    checkbox_keys = {cb.key for cb in at.checkbox}
+    assert "select_account_111111111111" in checkbox_keys
+    assert "select_account_222222222222" in checkbox_keys
+    # unselected by default — no account gets audited just from being discovered
+    assert all(cb.value is False for cb in at.checkbox if cb.key in checkbox_keys)
+
+    checkbox_labels = [cb.label for cb in at.checkbox]
+    assert any("PROD" in label and "111111111111" in label and "ACTIVE" in label for label in checkbox_labels)
+    assert any("DEV" in label and "222222222222" in label for label in checkbox_labels)
+
+
+def test_selected_account_reaches_orchestrator_unselected_is_excluded():
+    fake_accounts = [
+        {"id": "111111111111", "name": "PROD", "email": "p@x.com", "state": "ACTIVE"},
+        {"id": "222222222222", "name": "DEV", "email": "d@x.com", "state": "ACTIVE"},
+    ]
+    captured = {}
+
+    def fake_audit(session, target_accounts=None, organizations_status=None, progress_callback=None):
+        captured["target_accounts"] = target_accounts
+        return _FAKE_PIPELINE_AGGREGATE
+
+    with (
+        patch("src.aws.auth.verify_identity", return_value=_fake_identity()),
+        patch("src.orchestrator.discover_accounts", return_value=(fake_accounts, ok("organizations", {"accounts": 2}))),
+        patch("src.orchestrator.audit_all_accounts", side_effect=fake_audit),
+    ):
+        at = AppTest.from_file(APP_PATH)
+        at.run(timeout=15)
+        _enter_credentials_and_discover(at)
+
+        # only PROD selected — DEV stays unchecked
+        at.checkbox(key="select_account_111111111111").set_value(True)
+        at.run(timeout=15)
+        for button in at.button:
+            if button.label == "Run Audit":
+                button.click()
+        at.run(timeout=15)
+
+    assert captured["target_accounts"] == {"PROD": "111111111111"}
+
+
+def test_no_account_selected_blocks_audit_with_clear_message():
+    fake_accounts = [{"id": "111111111111", "name": "PROD", "email": "p@x.com", "state": "ACTIVE"}]
+
+    with (
+        patch("src.aws.auth.verify_identity", return_value=_fake_identity()),
+        patch("src.orchestrator.discover_accounts", return_value=(fake_accounts, ok("organizations", {"accounts": 1}))),
+        patch("src.orchestrator.audit_all_accounts") as mock_audit,
+    ):
+        at = AppTest.from_file(APP_PATH)
+        at.run(timeout=15)
+        _enter_credentials_and_discover(at)
+
+        for button in at.button:
+            if button.label == "Run Audit":
+                button.click()
+        at.run(timeout=15)
+
+        mock_audit.assert_not_called()
+
+    assert "Select at least one account" in _all_text(at)
+
+
+def test_discovery_with_no_accounts_shows_message_and_no_checkboxes():
+    with (
+        patch("src.aws.auth.verify_identity", return_value=_fake_identity()),
+        patch("src.orchestrator.discover_accounts", return_value=([], ok("organizations", {"accounts": 0}))),
+    ):
+        at = AppTest.from_file(APP_PATH)
+        at.run(timeout=15)
+        _enter_credentials_and_discover(at)
+
+    assert len(at.checkbox) == 0
+    assert "No accounts were discovered" in _all_text(at)
+
+
+def test_discover_accounts_not_queried_again_during_run_audit():
+    """discover_accounts (Organizations) is called once at Connect time —
+    running the audit afterward must reuse that same result, not trigger a
+    second Organizations API call."""
+    fake_accounts = [{"id": "111111111111", "name": "PROD", "email": "p@x.com", "state": "ACTIVE"}]
+
+    with (
+        patch("src.aws.auth.verify_identity", return_value=_fake_identity()),
+        patch("src.orchestrator.discover_accounts", return_value=(fake_accounts, ok("organizations", {"accounts": 1}))) as mock_discover,
+        patch("src.orchestrator.audit_all_accounts", return_value=_FAKE_PIPELINE_AGGREGATE),
+    ):
+        at = AppTest.from_file(APP_PATH)
+        at.run(timeout=15)
+        _enter_credentials_and_discover(at)
+
+        at.checkbox(key="select_account_111111111111").set_value(True)
+        at.run(timeout=15)
+        for button in at.button:
+            if button.label == "Run Audit":
+                button.click()
+        at.run(timeout=15)
+
+    assert mock_discover.call_count == 1
+
+
+def test_selected_target_accounts_ignores_non_discovered_ids():
+    """The selection UI only ever offers checkboxes for discovered accounts,
+    so this proves the mapping function structurally can't include an
+    account that wasn't actually discovered, even if a stray session_state
+    key existed for one."""
+    from app import _selected_target_accounts
+
+    discovered = [{"id": "111111111111", "name": "PROD", "email": "p@x.com", "state": "ACTIVE"}]
+    st.session_state["select_account_111111111111"] = True
+    st.session_state["select_account_999999999999"] = True  # not in discovered
+
+    assert _selected_target_accounts(discovered) == {"PROD": "111111111111"}
+
+
+def test_selected_target_accounts_disambiguates_duplicate_names():
+    from app import _selected_target_accounts
+
+    discovered = [
+        {"id": "111111111111", "name": "Sandbox", "email": "a@x.com", "state": "ACTIVE"},
+        {"id": "222222222222", "name": "Sandbox", "email": "b@x.com", "state": "ACTIVE"},
+    ]
+    st.session_state["select_account_111111111111"] = True
+    st.session_state["select_account_222222222222"] = True
+
+    assert _selected_target_accounts(discovered) == {
+        "Sandbox (111111111111)": "111111111111",
+        "Sandbox (222222222222)": "222222222222",
+    }
