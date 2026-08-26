@@ -157,7 +157,10 @@ def _key_risk_groups(findings: list[dict]) -> list[dict]:
         matches = [
             f
             for f in findings
-            if f.get("account_name") == account_label
+            # casefold: AWS Organizations account names are free text (e.g.
+            # "Prod"/"Dev"), not guaranteed to match this spec's casing —
+            # only the casing should be forgiven here, not the account itself.
+            if (f.get("account_name") or "").casefold() == account_label.casefold()
             and f.get("principal", {}).get("name") == principal_name
             and f.get("rule") in rule_filter
         ]

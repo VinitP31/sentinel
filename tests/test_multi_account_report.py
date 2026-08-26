@@ -199,6 +199,28 @@ def test_key_risks_exclude_aws_native_noise(tmp_path):
     assert "AWSServiceRoleForSupport" in content
 
 
+def test_key_risk_groups_match_account_label_case_insensitively():
+    """Regression test: AWS Organizations account names are free text (e.g.
+    "Prod"/"Dev"), not guaranteed to match _KEY_RISK_SPEC's "PROD"/"DEV"
+    casing. Before the fix, this exact scenario produced zero key risks
+    despite the underlying findings being complete and correct."""
+    from src.report.multi_account import _key_risk_groups
+
+    findings = [
+        f | {"account_name": "Prod" if f["account_name"] == "PROD" else "Dev"}
+        for f in make_aggregate()["findings"]
+    ]
+
+    key_risks = _key_risk_groups(findings)
+    principals_found = {f["principal"]["name"] for f in key_risks}
+
+    assert principals_found == {"prod-alice", "ProdAdminRole", "prod-bob", "dev-admin", "dev-charlie"}
+    # each curated entry still carries the real (mixed-case) account_name — the
+    # fix only changes the comparison, never the finding data itself
+    account_names = {f["account_name"] for f in key_risks}
+    assert account_names == {"Prod", "Dev"}
+
+
 def test_all_findings_sections_collapsed_by_default(tmp_path):
     content = render(tmp_path, make_aggregate()).read_text()
     assert "<details" in content
