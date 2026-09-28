@@ -5,5 +5,10 @@ python-dotenv>=1.0.0
 openai>=1.40.0
 streamlit>=1.32.0
 
+# vCenter
+pyvmomi>=8.0
+reportlab>=4.0
+pillow>=10.0
+
 # dev
 pytest>=8.0.0

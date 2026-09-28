@@ -39,6 +39,7 @@ from app import (
 )
 from src.aws import auth
 from src.util.status import ok
+from src.vcenter import auth as vcenter_auth
 
 APP_PATH = str(Path(__file__).parent.parent / "app.py")
 
@@ -1162,3 +1163,278 @@ def test_selected_target_accounts_disambiguates_duplicate_names():
         "Sandbox (111111111111)": "111111111111",
         "Sandbox (222222222222)": "222222222222",
     }
+
+
+# --- Provider selection: AWS unchanged, vCenter added (Phase 9) -----------
+
+
+def test_provider_defaults_to_aws_and_existing_aws_fields_still_render():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=15)
+
+    assert not at.exception
+    assert at.radio(key="provider").value == "AWS"
+    labels = [w.label for w in at.text_input]
+    assert any("Access Key ID" in label for label in labels)
+    button_labels = [b.label for b in at.button]
+    assert any("Connect & Discover Accounts" in label for label in button_labels)
+    # vCenter-only fields must not appear while AWS is selected
+    assert not any(label == "vCenter Host" for label in labels)
+
+
+def test_selecting_vcenter_shows_vcenter_input_fields_not_aws_fields():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=15)
+    at.radio(key="provider").set_value("vCenter")
+    at.run(timeout=15)
+
+    assert not at.exception
+    labels = [w.label for w in at.text_input]
+    assert "vCenter Host" in labels
+    assert "Username" in labels
+    assert "Password" in labels
+    # switching away from AWS must not still show the AWS credential form
+    assert not any("Access Key ID" in label for label in labels)
+
+    button_labels = [b.label for b in at.button]
+    assert any("Run vCenter Audit" in label for label in button_labels)
+
+
+def test_vcenter_password_field_is_masked():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=15)
+    at.radio(key="provider").set_value("vCenter")
+    at.run(timeout=15)
+
+    password_field = at.text_input(key="vcenter_password")
+    assert password_field.proto.type == 1  # PASSWORD
+
+
+# --- run_vcenter_audit: pure logic (pipeline mocked, no real vCenter call) -
+
+
+def test_run_vcenter_audit_invokes_existing_pipeline_unchanged(tmp_path, monkeypatch):
+    from app import run_vcenter_audit
+
+    monkeypatch.delenv("VCENTER_HOST", raising=False)
+    monkeypatch.delenv("VCENTER_USERNAME", raising=False)
+    monkeypatch.delenv("VCENTER_PASSWORD", raising=False)
+
+    captured = {}
+
+    def fake_pipeline(output_dir):
+        captured["output_dir"] = output_dir
+        captured["host"] = os.environ.get("VCENTER_HOST")
+        captured["username"] = os.environ.get("VCENTER_USERNAME")
+        captured["password"] = os.environ.get("VCENTER_PASSWORD")
+        return {"provider": "vcenter", "complete": True, "finding_count": 2, "statuses": []}
+
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline", side_effect=fake_pipeline) as mock_pipeline:
+        result = run_vcenter_audit("vcenter.example.test", "administrator@vsphere.local", "super-secret-value", output_dir=tmp_path)
+
+    mock_pipeline.assert_called_once_with(tmp_path)
+    assert captured["output_dir"] == tmp_path
+    assert captured["host"] == "vcenter.example.test"
+    assert captured["username"] == "administrator@vsphere.local"
+    assert captured["password"] == "super-secret-value"
+    assert result == {"provider": "vcenter", "complete": True, "finding_count": 2, "statuses": []}
+
+
+def test_run_vcenter_audit_never_leaves_credentials_in_the_environment(tmp_path, monkeypatch):
+    from app import run_vcenter_audit
+
+    monkeypatch.delenv("VCENTER_HOST", raising=False)
+    monkeypatch.delenv("VCENTER_USERNAME", raising=False)
+    monkeypatch.delenv("VCENTER_PASSWORD", raising=False)
+
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline", return_value={"provider": "vcenter", "complete": True}):
+        run_vcenter_audit("vcenter.example.test", "administrator@vsphere.local", "super-secret-value", output_dir=tmp_path)
+
+    assert "VCENTER_HOST" not in os.environ
+    assert "VCENTER_USERNAME" not in os.environ
+    assert "VCENTER_PASSWORD" not in os.environ
+
+
+def test_run_vcenter_audit_restores_a_preexisting_env_value_after_the_call(tmp_path, monkeypatch):
+    """If a real VCENTER_* env var already existed before the UI call (e.g. a
+    developer's own .env), it must be restored exactly, never left as
+    whatever the UI form happened to submit."""
+    from app import run_vcenter_audit
+
+    monkeypatch.setenv("VCENTER_HOST", "pre-existing-host.example.test")
+    monkeypatch.setenv("VCENTER_USERNAME", "pre-existing-user")
+    monkeypatch.setenv("VCENTER_PASSWORD", "pre-existing-secret")
+
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline", return_value={"provider": "vcenter", "complete": True}):
+        run_vcenter_audit("form-host.example.test", "form-user", "form-secret-value", output_dir=tmp_path)
+
+    assert os.environ["VCENTER_HOST"] == "pre-existing-host.example.test"
+    assert os.environ["VCENTER_USERNAME"] == "pre-existing-user"
+    assert os.environ["VCENTER_PASSWORD"] == "pre-existing-secret"
+
+
+def test_run_vcenter_audit_restores_environment_even_if_pipeline_raises(tmp_path, monkeypatch):
+    from app import run_vcenter_audit
+
+    monkeypatch.delenv("VCENTER_HOST", raising=False)
+    monkeypatch.delenv("VCENTER_USERNAME", raising=False)
+    monkeypatch.delenv("VCENTER_PASSWORD", raising=False)
+
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            run_vcenter_audit("vcenter.example.test", "administrator@vsphere.local", "super-secret-value", output_dir=tmp_path)
+
+    assert "VCENTER_HOST" not in os.environ
+    assert "VCENTER_USERNAME" not in os.environ
+    assert "VCENTER_PASSWORD" not in os.environ
+
+
+def test_run_vcenter_audit_defaults_output_dir_under_config_output(monkeypatch):
+    from app import run_vcenter_audit
+    from src import config
+
+    monkeypatch.delenv("VCENTER_HOST", raising=False)
+    monkeypatch.delenv("VCENTER_USERNAME", raising=False)
+    monkeypatch.delenv("VCENTER_PASSWORD", raising=False)
+
+    captured = {}
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline", side_effect=lambda output_dir: captured.setdefault("output_dir", output_dir) or {"complete": True}):
+        run_vcenter_audit("vcenter.example.test", "administrator@vsphere.local", "irrelevant")
+
+    assert captured["output_dir"] == config.OUTPUT_DIR / "vcenter"
+
+
+# --- vCenter UI end-to-end (AppTest, pipeline mocked) ----------------------
+
+
+def _run_vcenter_flow(fake_result_or_exception, host="vcenter.example.test", username="administrator@vsphere.local", password="super-secret-value"):
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=15)
+    at.radio(key="provider").set_value("vCenter")
+    at.run(timeout=15)
+    at.text_input(key="vcenter_host").set_value(host)
+    at.text_input(key="vcenter_username").set_value(username)
+    at.text_input(key="vcenter_password").set_value(password)
+    at.run(timeout=15)
+
+    if isinstance(fake_result_or_exception, Exception):
+        pipeline_kwargs = {"side_effect": fake_result_or_exception}
+    else:
+        pipeline_kwargs = {"return_value": fake_result_or_exception}
+
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline", **pipeline_kwargs):
+        for button in at.button:
+            if button.label == "Run vCenter Audit":
+                button.click()
+        at.run(timeout=15)
+    return at
+
+
+def test_vcenter_successful_audit_shows_finding_count_and_report_download(tmp_path):
+    html_path = tmp_path / "vcenter_security_audit_report.html"
+    html_path.write_text("<html><body>vCenter report</body></html>", encoding="utf-8")
+    pdf_path = tmp_path / "vcenter_security_audit_report.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+
+    fake_result = {
+        "provider": "vcenter",
+        "complete": True,
+        "statuses": [],
+        "finding_count": 2,
+        "report_html_path": html_path,
+        "report_pdf_path": pdf_path,
+    }
+
+    at = _run_vcenter_flow(fake_result)
+    assert not at.exception
+
+    text = _all_text(at)
+    assert "vCenter audit completed successfully" in text
+    assert "2 findings" in text
+    download_labels = [b.label for b in at.download_button]
+    assert any("Download vCenter Report" in label for label in download_labels)
+
+
+def test_vcenter_authentication_failure_shows_clean_message_not_a_traceback():
+    at = _run_vcenter_flow(vcenter_auth.VCenterAuthError("REST authentication failed: 401"))
+    assert not at.exception
+
+    text = _all_text(at)
+    assert "Unable to authenticate with vCenter" in text
+    assert "Traceback" not in text
+
+
+def test_vcenter_missing_fields_blocks_run_without_calling_pipeline():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=15)
+    at.radio(key="provider").set_value("vCenter")
+    at.run(timeout=15)
+    # leave host/username/password blank
+
+    with patch("app.vcenter_pipeline.run_vcenter_pipeline") as mock_pipeline:
+        for button in at.button:
+            if button.label == "Run vCenter Audit":
+                button.click()
+        at.run(timeout=15)
+        mock_pipeline.assert_not_called()
+
+    assert "required" in _all_text(at).lower()
+
+
+def test_vcenter_collection_failure_reported_without_exception():
+    from src.util.status import failed as status_failed
+
+    fake_result = {
+        "provider": "vcenter",
+        "complete": False,
+        "statuses": [status_failed("inventory", "REST call failed: 503")],
+    }
+
+    at = _run_vcenter_flow(fake_result)
+    assert not at.exception
+
+    text = _all_text(at)
+    assert "did not complete" in text
+    assert "REST call failed: 503" in text
+
+
+def test_vcenter_credentials_never_appear_in_rendered_output():
+    html_path_result = {
+        "provider": "vcenter",
+        "complete": True,
+        "statuses": [],
+        "finding_count": 0,
+        "report_html_path": None,
+        "report_pdf_path": None,
+    }
+
+    at = _run_vcenter_flow(html_path_result, password="SUPERSECRETVCENTERPASSWORD")
+    assert not at.exception
+
+    text = _all_text(at)
+    assert "SUPERSECRETVCENTERPASSWORD" not in text
+
+
+def test_vcenter_password_never_printed_to_terminal(capsys):
+    fake_result = {"provider": "vcenter", "complete": True, "statuses": [], "finding_count": 0}
+    _run_vcenter_flow(fake_result, password="SUPERSECRETVCENTERPASSWORD")
+
+    assert "SUPERSECRETVCENTERPASSWORD" not in capsys.readouterr().out
+
+
+def test_aws_flow_still_unaffected_after_visiting_vcenter_tab():
+    """Switching to vCenter and back must not corrupt the AWS form/session
+    state — the AWS flow is unmodified regardless of provider having been
+    toggled earlier in the same session."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=15)
+    at.radio(key="provider").set_value("vCenter")
+    at.run(timeout=15)
+    at.radio(key="provider").set_value("AWS")
+    at.run(timeout=15)
+
+    assert not at.exception
+    labels = [w.label for w in at.text_input]
+    assert any("Access Key ID" in label for label in labels)
+    button_labels = [b.label for b in at.button]
+    assert any("Connect & Discover Accounts" in label for label in button_labels)

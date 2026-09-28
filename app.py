@@ -24,6 +24,7 @@ import os
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import boto3
 import streamlit as st
@@ -37,6 +38,8 @@ from src.report.multi_account import (
     _risk_counts,
     _risk_level,
 )
+from src.vcenter import auth as vcenter_auth
+from src.vcenter import pipeline as vcenter_pipeline
 
 GET_CREDENTIALS_DURATION_SECONDS = 3600
 
@@ -776,11 +779,7 @@ def _selected_target_accounts(discovered_accounts: list[dict]) -> dict[str, str]
     return target_accounts
 
 
-def main() -> None:
-    st.set_page_config(page_title="Sentinel", layout="wide")
-    st.title("Sentinel")
-    st.caption("Multi-Account IAM Security Audit")
-
+def _render_aws_ui() -> None:
     st.session_state.setdefault("aggregate", None)
     st.session_state.setdefault("error", None)
     st.session_state.setdefault("access_key_id", "")
@@ -945,6 +944,123 @@ def main() -> None:
 
     if st.session_state.get("aggregate"):
         render_dashboard(st.session_state["aggregate"])
+
+
+# --- vCenter: provider-specific UI, reusing the existing pipeline unchanged ---
+
+
+def run_vcenter_audit(host: str, username: str, password: str, output_dir: Path | None = None) -> dict:
+    """Runs the existing, unmodified src.vcenter.pipeline.run_vcenter_pipeline.
+
+    That pipeline (and src.vcenter.auth.login beneath it) reads credentials
+    only from VCENTER_HOST/VCENTER_USERNAME/VCENTER_PASSWORD env vars — the
+    same mechanism its own tests already rely on (monkeypatch.setenv). This
+    sets those three vars for the duration of this call only, then restores
+    whatever was there before (or removes them if nothing was), so the
+    password never touches disk and never outlives this one call. No vCenter
+    logic is duplicated here — this function only wires UI input to that
+    existing entry point.
+    """
+    output_dir = output_dir or (config.OUTPUT_DIR / "vcenter")
+    env_keys = ("VCENTER_HOST", "VCENTER_USERNAME", "VCENTER_PASSWORD")
+    previous = {key: os.environ.get(key) for key in env_keys}
+    os.environ["VCENTER_HOST"] = host
+    os.environ["VCENTER_USERNAME"] = username
+    os.environ["VCENTER_PASSWORD"] = password
+    try:
+        return vcenter_pipeline.run_vcenter_pipeline(output_dir)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def format_vcenter_auth_error() -> str:
+    return "Unable to authenticate with vCenter. Check the supplied host, username, and password."
+
+
+def _render_vcenter_result(result: dict) -> None:
+    """Displays the run_vcenter_pipeline result using the same
+    embed/download idiom the AWS flow already uses for its graph/report
+    artifacts (_embed_html_file / _download_button_for) — no second report
+    generator, no new rendering path."""
+    if not result.get("complete", False):
+        st.warning("vCenter collection did not complete successfully.")
+        for status in result.get("statuses", []):
+            if not status.succeeded:
+                st.error(f"{status.source}: {status.error or 'failed'}")
+        return
+
+    st.success(f"**vCenter audit completed successfully**\n\n{result.get('finding_count', 0)} findings")
+
+    html_path = result.get("report_html_path")
+    if html_path:
+        embedded = _embed_html_file(Path(html_path))
+        if not embedded:
+            st.info("Report not available yet.")
+
+    pdf_path = result.get("report_pdf_path")
+    if pdf_path:
+        _download_button_for(Path(pdf_path), "Download vCenter Report (PDF)", key="dl_vcenter_report_pdf")
+
+
+def _render_vcenter_ui() -> None:
+    st.session_state.setdefault("vcenter_host", "")
+    st.session_state.setdefault("vcenter_username", "")
+    st.session_state.setdefault("vcenter_password", "")
+    st.session_state.setdefault("vcenter_result", None)
+    st.session_state.setdefault("vcenter_error", None)
+
+    st.subheader("Connect vCenter")
+    st.text_input("vCenter Host", key="vcenter_host")
+    st.text_input("Username", key="vcenter_username")
+    st.text_input("Password", type="password", key="vcenter_password")
+
+    run_clicked = st.button("Run vCenter Audit", type="primary")
+
+    if run_clicked:
+        st.session_state["vcenter_error"] = None
+        st.session_state["vcenter_result"] = None
+        host = st.session_state["vcenter_host"]
+        username = st.session_state["vcenter_username"]
+        password = st.session_state["vcenter_password"]
+
+        if not host or not username or not password:
+            st.session_state["vcenter_error"] = "vCenter Host, Username, and Password are all required."
+        else:
+            with st.status("Running vCenter audit...", expanded=True) as status:
+                try:
+                    result = run_vcenter_audit(host, username, password)
+                    st.session_state["vcenter_result"] = result
+                    status.update(label="vCenter audit complete", state="complete", expanded=False)
+                except vcenter_auth.VCenterAuthError:
+                    status.update(label="Authentication failed", state="error")
+                    st.session_state["vcenter_error"] = format_vcenter_auth_error()
+                except Exception as exc:  # noqa: BLE001 — surfaced as a clean message, not a raw traceback
+                    status.update(label="Audit failed", state="error")
+                    st.session_state["vcenter_error"] = format_audit_error(exc)
+
+    if st.session_state.get("vcenter_error"):
+        st.error(st.session_state["vcenter_error"])
+
+    if st.session_state.get("vcenter_result"):
+        _render_vcenter_result(st.session_state["vcenter_result"])
+
+
+def main() -> None:
+    st.set_page_config(page_title="Sentinel", layout="wide")
+    st.title("Sentinel")
+    st.caption("Multi-Account IAM Security Audit")
+
+    st.session_state.setdefault("provider", "AWS")
+    provider = st.radio("Provider", ["AWS", "vCenter"], key="provider", horizontal=True)
+
+    if provider == "AWS":
+        _render_aws_ui()
+    else:
+        _render_vcenter_ui()
 
 
 if __name__ == "__main__":
