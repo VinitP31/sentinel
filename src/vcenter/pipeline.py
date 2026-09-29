@@ -43,6 +43,8 @@ from pathlib import Path
 import networkx as nx
 
 from src.evidence.build import build_evidence_package
+from src.evidence.collection_evidence import build_vcenter_collection_evidence
+from src.evidence.evidence_report import render_collection_evidence_pdf
 from src.util.io import write_json
 from src.util.status import CollectionStatus
 from src.vcenter import auth, authorization_collector, inventory_collector
@@ -111,6 +113,17 @@ def run_vcenter_pipeline(output_dir: Path) -> dict:
         normalized = normalize(inventory, authorization)
         write_json(normalized_dir / "vcenter.json", normalized)
 
+        # Collection evidence: what was actually collected, built only from
+        # inventory/authorization/normalized/statuses already gathered above
+        # - no recollection, no recomputation. The JSON is internal; the PDF
+        # is the user-facing artifact. Kept entirely separate from the
+        # security report below.
+        evidence_json_path = write_json(
+            output_dir / "collection_evidence.json",
+            build_vcenter_collection_evidence(session.rest_base_url, inventory, authorization, normalized, statuses),
+        )
+        evidence_pdf_path = render_collection_evidence_pdf(evidence_json_path, output_dir / "vcenter_collection_evidence.pdf")
+
         # vCenter-specific deterministic findings only (VCENTER-ADMIN-001,
         # VCENTER-AUTH-001). No activity-dependent rule is called - activity
         # is NOT_SUPPORTED for vCenter.
@@ -139,6 +152,8 @@ def run_vcenter_pipeline(output_dir: Path) -> dict:
             "report_html_path": html_report_path,
             "report_pdf_path": pdf_report_path,
             "finding_count": len(findings),
+            "collection_evidence_path": evidence_json_path,
+            "collection_evidence_pdf_path": evidence_pdf_path,
         }
     finally:
         auth.logout(session)

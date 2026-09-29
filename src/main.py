@@ -13,6 +13,8 @@ from src.analysis import rules
 from src.analysis.indirect_privilege_path import find_indirect_privilege_paths
 from src.aws import access_analyzer_collector, auth, cloudtrail_collector, iam_collector, last_accessed_collector
 from src.evidence.build import build_evidence_package
+from src.evidence.collection_evidence import build_aws_collection_evidence
+from src.evidence.evidence_report import render_collection_evidence_pdf
 from src.graph.build import build_graph
 from src.graph.visualize import render_graph
 from src.normalize.iam import normalize, resolve_group_inheritance
@@ -285,6 +287,18 @@ def run_pipeline(session, identity: dict, output_dir: Path, progress_callback=No
             print(f"  ({len(explanations)} explanation(s) generated before the failure)", file=sys.stderr)
             _notify(10, "AI Security Explanation", "failed", ai_duration)
 
+        # Collection evidence: what was actually collected, built only from
+        # data already gathered above (raw_iam, normalized, last_accessed_data,
+        # cloudtrail_data, analyzer_data, statuses) - no recollection, no
+        # recomputation. The JSON is internal; the PDF is the user-facing
+        # artifact. Kept entirely separate from the security report below.
+        evidence_json_path = write_json(
+            output_dir / "collection_evidence.json",
+            build_aws_collection_evidence(identity, raw_iam, normalized, last_accessed_data, cloudtrail_data, analyzer_data, statuses),
+        )
+        evidence_pdf_path = render_collection_evidence_pdf(evidence_json_path, output_dir / "aws_collection_evidence.pdf")
+        print(f"  Collection evidence -> {evidence_pdf_path.relative_to(config.PROJECT_ROOT)}")
+
         # Demo report — presentation only; reads outputs already written above, recomputes nothing.
         report_context = {
             "identity": identity,
@@ -309,6 +323,7 @@ def run_pipeline(session, identity: dict, output_dir: Path, progress_callback=No
         print(f"  Findings          : {findings_path.relative_to(config.PROJECT_ROOT)}")
         print(f"  Evidence package  : {evidence_path.relative_to(config.PROJECT_ROOT)}")
         print(f"  AI explanations   : {explanations_path.relative_to(config.PROJECT_ROOT)}")
+        print(f"  Collection evidence: {evidence_pdf_path.relative_to(config.PROJECT_ROOT)}")
         print(f"  Total audit time  : {_format_duration(total_duration)}")
         print()
 
@@ -321,6 +336,8 @@ def run_pipeline(session, identity: dict, output_dir: Path, progress_callback=No
                 "evidence_path": evidence_path,
                 "explanations_path": explanations_path,
                 "finding_count": len(findings),
+                "collection_evidence_path": evidence_json_path,
+                "collection_evidence_pdf_path": evidence_pdf_path,
             }
         )
     else:
